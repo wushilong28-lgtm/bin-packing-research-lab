@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#10212b" />
+  <meta name="description" content="Explore dynamic Green Bin Packing with arrivals, departures, reported sizes and durations, and clairvoyant and non-clairvoyant placement algorithms." />
+  <title>Dynamic Green Packing · Bin Packing Research Lab</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2310212b'/%3E%3Cpath d='M12 21h40v31H12z' fill='none' stroke='%23f2b544' stroke-width='4'/%3E%3Cpath d='M12 36h40M28 21v15M40 36v16' stroke='%23f2b544' stroke-width='4'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./dynamic-green.css" />
+  <script src="./probability.js" defer></script>
+  <script src="./dynamic-green-core.js" defer></script>
+  <script src="./dynamic-green.js" defer></script>
+</head>
+<body class="dynamic-page">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>Bin Packing <b>/</b> Research Lab</span></div>
+    <nav class="lab-nav" aria-label="Experiment pages"><a href="./index.html">Basic packing</a><a href="./green.html">Green packing</a><a href="./dynamic-green.html" aria-current="page">Dynamic Green</a></nav>
+  </header>
+  <main class="workspace">
+    <aside class="controls expanded" aria-labelledby="config-title">
+      <div class="panel-heading"><div><p class="eyebrow">EXPERIMENT SETUP / 03</p><h1 id="config-title">Design your experiment</h1></div></div>
+      <p class="intro">Jobs arrive and depart. Change size and duration reporting, then compare paper-inspired placement rules on the same jobs.</p>
+      <form id="dynamic-form">
+        <section class="control-section" aria-labelledby="sample-heading">
+          <h2 id="sample-heading"><span>01</span> Sampling</h2>
+          <div class="field-grid two">
+            <label class="field"><span>Number of jobs <small>N</small></span><input id="job-count" type="number" min="1" max="1000" step="1" value="180" required /></label>
+            <label class="field"><span>Number of trials <small>R</small></span><input id="trial-count" type="number" min="1" max="30" step="1" value="5" required /></label>
+          </div>
+          <label class="field spaced"><span>Random seed</span><input id="random-seed" type="number" min="0" max="4294967295" step="1" value="20261013" required /><em>Same seed and settings reproduce the same jobs.</em></label>
+          <p class="field-note">True size a ~ Uniform(0, 1). Time unit: hours.</p>
+        </section>
+        <section class="control-section" aria-labelledby="time-heading">
+          <h2 id="time-heading"><span>02</span> Arrival &amp; true duration</h2>
+          <div class="field-grid two">
+            <label class="field"><span>Arrival pattern</span><select id="arrival-pattern"><option value="exponential">Random intervals</option><option value="fixed">Fixed intervals</option></select></label>
+            <label class="field"><span>Mean / fixed interval <small>h</small></span><input id="arrival-interval" type="number" min="0.01" max="1000" step="0.01" value="0.4" required /></label>
+            <label class="field"><span>Minimum duration <small>h</small></span><input id="duration-min" type="number" min="0.01" max="1000" step="0.01" value="2" required /></label>
+            <label class="field"><span>Maximum duration <small>h</small></span><input id="duration-max" type="number" min="0.01" max="1000" step="0.01" value="12" required /></label>
+          </div>
+          <p class="field-note">The first job arrives at 0. True duration D ~ Uniform(min, max); random arrival gaps are exponential with the chosen mean.</p>
+        </section>
+        <section class="control-section" aria-labelledby="mode-heading">
+          <h2 id="mode-heading"><span>03</span> Mode selection probability</h2>
+          <p class="section-copy">Estimate size z and duration D̃ first. Hard probability is (1 − λ)gₛ(z) + λgₜ(D̃).</p>
+          <div class="field-grid two">
+            <label class="field"><span>Size judgment error</span><select id="error-type"><option value="none">No error</option><option value="normal" selected>Normal distribution</option><option value="uniform">Uniform distribution</option><option value="laplace">Laplace distribution</option><option value="triangular">Symmetric triangular</option><option value="cauchy">Cauchy distribution</option><option value="exponential">Centered exponential</option><option value="two-point">Two-point distribution</option></select></label>
+            <label class="field"><span>Size error scale</span><input id="error-scale" type="number" min="0" max="1" step="0.01" value="0.08" required /></label>
+            <label class="field"><span>Duration error <small>±%</small></span><input id="duration-error" type="number" min="0" max="99" step="1" value="20" required /><em>D̃ = D × (1 + ε), ε uniform in [−δ, +δ].</em></label>
+            <label class="field"><span>Duration weight <small>λ</small></span><input id="time-weight" type="number" min="0" max="1" step="0.05" value="0.5" required /><em>0 = size only; 1 = duration only.</em></label>
+          </div>
+          <label class="field spaced"><span>Size probability preset</span><select id="probability-preset"><option value="logistic">Increasing logistic</option><option value="increasing">Linear increase</option><option value="decreasing">Linear decrease</option><option value="constant">Constant probability</option><option value="step">Step function</option><option value="custom">Custom</option></select></label>
+          <label class="field spaced"><span>Size probability expression <small>gₛ(z)</small></span><input id="probability-expression" type="text" value="1/(1+exp(-12*(z-0.5)))" maxlength="180" spellcheck="false" autocomplete="off" required /></label>
+          <p class="field-note">z = clip(a + size error, 0, 1). The expression accepts z, exp, log, sqrt, abs, min, max, clamp, step, and arithmetic.</p>
+          <div class="field-grid two spaced">
+            <label class="field"><span>Duration midpoint <small>h</small></span><input id="duration-midpoint" type="number" min="0.01" max="1000" step="0.01" value="7" required /></label>
+            <label class="field"><span>Transition width <small>h</small></span><input id="duration-width" type="number" min="0.01" max="1000" step="0.01" value="1.5" required /></label>
+          </div>
+          <p class="field-note">gₜ(D̃) = 1 / (1 + exp(−(D̃ − midpoint) / width)). At the midpoint, duration alone gives 50%.</p>
+        </section>
+        <section class="control-section" aria-labelledby="report-heading">
+          <h2 id="report-heading"><span>04</span> Reported size &amp; duration</h2>
+          <p class="section-copy">After one mode draw, apply the mode bounds to both estimated values.</p>
+          <div class="field-grid two">
+            <label class="field"><span>Simple size cap <small>tₛ</small></span><input id="simple-size" type="number" min="0" max="1" step="0.01" value="0.2" required /><em>Report min(tₛ, z).</em></label>
+            <label class="field"><span>Hard size floor <small>tₗ</small></span><input id="hard-size" type="number" min="0" max="1" step="0.01" value="0.7" required /><em>Report max(tₗ, z).</em></label>
+            <label class="field"><span>Simple duration cap <small>h</small></span><input id="simple-duration" type="number" min="0.01" max="1000" step="0.01" value="4" required /><em>Report min(cap, D̃).</em></label>
+            <label class="field"><span>Hard duration floor <small>h</small></span><input id="hard-duration" type="number" min="0.01" max="1000" step="0.01" value="8" required /><em>Report max(floor, D̃).</em></label>
+          </div>
+        </section>
+        <section class="control-section" aria-labelledby="cost-heading">
+          <h2 id="cost-heading"><span>05</span> Green cost &amp; threshold</h2>
+          <div class="field-grid two">
+            <label class="field"><span>Green capacity <small>G</small></span><input id="green-capacity" type="number" min="0" max="1" step="0.01" value="0.5" required /></label>
+            <label class="field"><span>Black-space price <small>β</small></span><input id="black-price" type="number" min="0.01" max="100" step="0.01" value="5" required /></label>
+            <label class="field"><span>Extra fill threshold <small>τ</small></span><input id="packing-threshold" type="number" min="0" max="1" step="0.01" value="0.1" required /><em>Usual fill limit: G + τ.</em></label>
+            <label class="field"><span>Departure class width <small>h</small></span><input id="category-width" type="number" min="0.01" max="1000" step="0.01" value="3" required /><em>For Classify by Departure Time.</em></label>
+          </div>
+          <p id="regime-note" class="field-note" role="status"></p>
+        </section>
+        <button class="run-button" type="submit"><span aria-hidden="true">▶</span> Run dynamic experiment</button>
+        <p id="form-error" class="form-error" role="alert" hidden></p>
+      </form>
+    </aside>
+    <section class="results" aria-labelledby="results-heading">
+      <div class="results-heading"><div><p class="eyebrow">DYNAMIC GREEN PACKING / REPORTED JOBS</p><h2 id="results-heading">Clairvoyant vs non-clairvoyant</h2></div><div class="run-badge" id="run-badge">Ready to run</div></div>
+      <div class="result-lead"><p>Objective: minimize <strong>bin-hours + β × black-space-hours</strong>. Jobs leave at arrival + <em>reported</em> duration. Placement and cost use reported size only.</p></div>
+      <div class="stat-row"><article class="stat-card stat-true"><div class="stat-label"><i></i>Lowest mean cost</div><div class="stat-value" id="best-cost">—</div><div class="stat-unit" id="best-algorithm">Across the paper-inspired algorithms</div></article><article class="stat-card stat-reported"><div class="stat-label"><i></i>Bin-hours</div><div class="stat-value" id="best-bin-time">—</div><div class="stat-unit">Mean for the lowest-cost algorithm</div></article><article class="stat-card stat-difference"><div class="stat-label">Black-space-hours</div><div class="stat-value" id="best-black-time">—</div><div class="stat-unit">Before multiplying by β</div></article></div>
+      <article class="chart-card" aria-labelledby="cost-chart-title"><div class="chart-heading"><div><p class="eyebrow">MEAN COST / PAIRED TRIALS</p><h3 id="cost-chart-title">Where each algorithm spends</h3></div><div class="legend"><span><i class="true-dot"></i>Bin-hours</span><span><i class="reported-dot"></i>Black-space charge</span></div></div><div id="cost-chart" class="cost-chart" role="img" aria-label="Mean cost by algorithm"></div><p class="chart-caption">All algorithms see identical reported jobs within each trial. Non-clairvoyant placement ignores duration; clairvoyant placement may use reported departure. The full-capacity First Fit row is a reference.</p></article>
+      <div class="bottom-grid"><article class="insight-card"><p class="eyebrow">DETAILED RESULTS</p><h3>Cost and usage by algorithm</h3><div class="green-table-wrap"><table class="green-table"><thead><tr><th scope="col">Algorithm</th><th scope="col">Total</th><th scope="col">Bin-h</th><th scope="col">Black-h</th><th scope="col">Peak bins</th></tr></thead><tbody id="results-table"></tbody></table></div><p class="chart-caption">Means per trial. Bin-h is the time integral of active bins; black-h is the time integral of fill above G.</p></article><article class="model-card"><p class="eyebrow">EXPERIMENT RULES</p><h3>How this experiment works</h3><div class="rule"><span class="rule-number">1</span><p>Draw arrival, true size and true duration. Estimate size with the chosen error and duration with a uniform percentage error.</p></div><div class="rule"><span class="rule-number">2</span><p>Average size and duration Hard probabilities using λ. Draw one mode, then cap or floor both reports.</p></div><div class="rule"><span class="rule-number">3</span><p>At each time, departures release reported capacity before simultaneous arrivals. Reported duration controls departure; true values never change occupancy.</p></div><div class="rule"><span class="rule-number">4</span><p>Threshold algorithms use G + τ. A reported size above that limit gets a singleton bin. Empty bins close; jobs never move.</p></div><div class="rule"><span class="rule-number">5</span><p>Non-clairvoyant algorithms cannot inspect duration during placement. Clairvoyant algorithms may inspect the reported departure time.</p></div></article></div>
+      <article class="chart-card" aria-labelledby="timeline-title"><div class="chart-heading"><div><p class="eyebrow">FIRST TRIAL / EVENT VIEW</p><h3 id="timeline-title">Active bins over time</h3></div><label class="field compact-field"><span>Inspect algorithm</span><select id="inspect-algorithm"></select></label></div><div id="timeline-chart" class="timeline-chart" role="img" aria-label="Active bins timeline"></div><p class="chart-caption">The step chart follows arrivals and departures. It reaches zero after the last reported departure.</p><div class="green-table-wrap job-preview"><table class="green-table job-table"><thead><tr><th scope="col">Job</th><th scope="col">Arrive</th><th scope="col">Size a → z → r</th><th scope="col">Duration D → D̃ → report</th><th scope="col">Hard p</th><th scope="col">Mode</th><th scope="col">Leave</th><th scope="col">Bin</th></tr></thead><tbody id="sample-table"></tbody></table></div><p class="chart-caption">First 100 jobs of the first trial, or all jobs if fewer. The last column follows the inspected algorithm.</p></article>
+      <p class="footnote">Algorithms adapt the one-dimensional placement ideas in Lee and Tang, <em>Evaluation of Dynamic Vector Bin Packing for Virtual Machine Placement</em>. Its results and competitive guarantees concern the paper's original capacity and usage-time model; the threshold and Green charge here are research extensions. All calculations run locally in your browser.</p>
+    </section>
+  </main>
+</body>
+</html>

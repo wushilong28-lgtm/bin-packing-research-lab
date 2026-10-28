@@ -1,0 +1,33 @@
+.dynamic-page .workspace{grid-template-columns:minmax(330px,410px) minmax(0,1fr)}
+.dynamic-page .controls{padding-bottom:55px}
+.dynamic-page .spaced{margin-top:14px}
+.dynamic-page .field-grid .field em{line-height:1.45}
+.dynamic-page .field-note{margin-top:10px}
+.dynamic-page .cost-chart{margin:18px 0 9px}
+.dynamic-page .cost-row{display:grid;grid-template-columns:185px minmax(0,1fr) 68px;gap:12px;align-items:center;margin:10px 0;font-size:.75rem;color:#536c72}
+.dynamic-page .cost-row strong{font-variant-numeric:tabular-nums;text-align:right;color:#25434b}
+.dynamic-page .cost-name{font-weight:700}
+.dynamic-page .cost-track{height:20px;background:#f0f4f3;border-radius:5px;display:flex;overflow:hidden}
+.dynamic-page .cost-opening{height:100%;background:#117890}
+.dynamic-page .cost-black{height:100%;background:#d79a2d}
+.dynamic-page .reference-row{border-top:1px dashed #d7e1df}
+.dynamic-page .group-heading{margin:20px 0 8px;color:#81969a;font-size:.66rem;letter-spacing:.13em;font-weight:800;text-transform:uppercase}
+.dynamic-page .green-table-wrap{overflow-x:auto;margin-top:13px}
+.dynamic-page .job-preview{overflow:auto}
+.dynamic-page .green-table{border-collapse:collapse;width:100%;font-size:.73rem;color:#4f6970;white-space:nowrap}
+.dynamic-page .green-table th,.dynamic-page .green-table td{padding:9px 7px;border-bottom:1px solid #e8eeec;text-align:right;font-variant-numeric:tabular-nums}
+.dynamic-page .green-table th:first-child{text-align:left}
+.dynamic-page .green-table tbody th{font-weight:700;color:#2d4b53}
+.dynamic-page .green-table thead th{font-size:.68rem;color:#7a9095}
+.dynamic-page .green-table tbody tr.group-row th{text-align:left;color:#9a702c;background:#fbf9f4;font-size:.68rem;letter-spacing:.1em}
+.dynamic-page .green-table tbody tr.reference-row th,.dynamic-page .green-table tbody tr.reference-row td{padding-top:15px}
+.dynamic-page .compact-field{min-width:210px}
+.dynamic-page .compact-field select{height:36px}
+.dynamic-page .timeline-chart{height:185px;margin-top:12px;overflow:hidden}
+.dynamic-page .timeline-chart svg{width:100%;height:100%;display:block}
+.dynamic-page .job-table{margin-top:8px}
+.dynamic-page .job-table th:nth-child(3),.dynamic-page .job-table th:nth-child(4),.dynamic-page .job-table td:nth-child(3),.dynamic-page .job-table td:nth-child(4){text-align:center}
+.dynamic-page .footnote{margin-top:18px}
+@media(max-width:1100px){.dynamic-page .workspace{grid-template-columns:340px minmax(0,1fr)}.dynamic-page .cost-row{grid-template-columns:145px minmax(0,1fr) 54px;gap:7px}}
+@media(max-width:780px){.dynamic-page .workspace{display:block}.dynamic-page .controls{padding-bottom:25px}.dynamic-page .controls .eyebrow,.dynamic-page .controls .intro{display:block}.dynamic-page .controls .field em{display:block}.dynamic-page .controls form>.control-section{display:block}.dynamic-page .cost-row{grid-template-columns:145px minmax(0,1fr) 58px}.dynamic-page .chart-heading{display:block}.dynamic-page .compact-field{margin-top:14px}}
+@media(max-width:560px){.dynamic-page .lab-nav a{font-size:.68rem;padding:6px 2px}.dynamic-page .cost-row{grid-template-columns:110px minmax(0,1fr) 48px;font-size:.66rem}.dynamic-page .cost-row strong{font-size:.68rem}.dynamic-page .field-grid.two{grid-template-columns:1fr 1fr}}

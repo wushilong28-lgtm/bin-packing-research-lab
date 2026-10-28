@@ -56,7 +56,7 @@
     return { actual, perceived, hardModes, reported };
   }
 
-  function firstFit(sizes, effectiveCapacity) {
+  function firstFit(sizes, effectiveCapacity, assignments) {
     let base = 1;
     while (base < sizes.length) base *= 2;
     const remaining = new Float64Array(base * 2);
@@ -81,6 +81,7 @@
         loads[index] += size;
         remaining[node] = Math.max(0, effectiveCapacity - loads[index]);
       }
+      if (assignments && assignments.length < 100) assignments.push(node - base + 1);
       while (node > 1) {
         node = Math.floor(node / 2);
         remaining[node] = Math.max(remaining[node * 2], remaining[node * 2 + 1]);
@@ -89,7 +90,7 @@
     return loads;
   }
 
-  function orderedFit(sizes, effectiveCapacity, useWorst) {
+  function orderedFit(sizes, effectiveCapacity, useWorst, assignments) {
     // Treap keys are remaining capacity and then opening order.
     const compare = (a, b) => a.remaining - b.remaining || a.order - b.order;
     const count = (node) => node?.count ?? 0;
@@ -142,6 +143,7 @@
     for (const size of sizes) {
       if (size > effectiveCapacity + EPS) {
         loads.push(size);
+        if (assignments && assignments.length < 100) assignments.push(loads.length);
         continue;
       }
       let chosen = null;
@@ -163,6 +165,7 @@
         }
       }
       if (chosen) {
+        if (assignments && assignments.length < 100) assignments.push(chosen.order + 1);
         root = remove(root, chosen);
         loads[chosen.order] += size;
         chosen.remaining = Math.max(0, effectiveCapacity - loads[chosen.order]);
@@ -173,13 +176,14 @@
       } else {
         const order = loads.length;
         loads.push(size);
+        if (assignments && assignments.length < 100) assignments.push(order + 1);
         root = insert(root, { remaining: Math.max(0, effectiveCapacity - size), order, priority: priorityFor(order), left: null, right: null, count: 1 });
       }
     }
     return loads;
   }
 
-  function nextFit(sizes, effectiveCapacity) {
+  function nextFit(sizes, effectiveCapacity, assignments) {
     const loads = [];
     let current = -1;
     for (const size of sizes) {
@@ -192,6 +196,7 @@
       } else {
         loads[current] += size;
       }
+      if (assignments && assignments.length < 100) assignments.push(size > effectiveCapacity + EPS ? loads.length : current + 1);
     }
     return loads;
   }
@@ -202,13 +207,14 @@
     return Math.min(classes, Math.max(1, Math.floor(1 / normalized))) - 1;
   }
 
-  function harmonic(sizes, effectiveCapacity, classes = 10) {
+  function harmonic(sizes, effectiveCapacity, classes = 10, assignments) {
     const loads = [];
     const active = new Int32Array(classes);
     active.fill(-1);
     for (const size of sizes) {
       if (size > effectiveCapacity + EPS) {
         loads.push(size);
+        if (assignments && assignments.length < 100) assignments.push(loads.length);
         continue;
       }
       const group = effectiveCapacity === 0 ? classes - 1 : harmonicClass(size, effectiveCapacity, classes);
@@ -220,21 +226,22 @@
       } else {
         loads[index] += size;
       }
+      if (assignments && assignments.length < 100) assignments.push(index + 1);
     }
     return loads;
   }
 
-  function pack(sizes, algorithm, effectiveCapacity, harmonicClasses = 10) {
+  function pack(sizes, algorithm, effectiveCapacity, harmonicClasses = 10, assignments) {
     if (!ALGORITHMS.includes(algorithm)) throw new Error("Unknown placement algorithm.");
     if (!Number.isFinite(effectiveCapacity) || effectiveCapacity < 0 || effectiveCapacity > 1) throw new Error("Effective capacity must be between 0 and 1.");
     for (const size of sizes) {
       if (!Number.isFinite(size) || size < 0 || size > 1) throw new Error("Reported sizes must be between 0 and 1.");
     }
-    if (algorithm === "first-fit") return firstFit(sizes, effectiveCapacity);
-    if (algorithm === "best-fit") return orderedFit(sizes, effectiveCapacity, false);
-    if (algorithm === "worst-fit") return orderedFit(sizes, effectiveCapacity, true);
-    if (algorithm === "next-fit") return nextFit(sizes, effectiveCapacity);
-    return harmonic(sizes, effectiveCapacity, harmonicClasses);
+    if (algorithm === "first-fit") return firstFit(sizes, effectiveCapacity, assignments);
+    if (algorithm === "best-fit") return orderedFit(sizes, effectiveCapacity, false, assignments);
+    if (algorithm === "worst-fit") return orderedFit(sizes, effectiveCapacity, true, assignments);
+    if (algorithm === "next-fit") return nextFit(sizes, effectiveCapacity, assignments);
+    return harmonic(sizes, effectiveCapacity, harmonicClasses, assignments);
   }
 
   function cost(loads, greenCapacity, blackPrice) {

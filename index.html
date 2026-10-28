@@ -11,15 +11,15 @@
   <script src="./probability.js" defer></script>
   <script src="./app.js" defer></script>
 </head>
-<body>
+<body class="basic-page">
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span>Bin Packing <b>/</b> Research Lab</span></div>
-    <nav class="lab-nav" aria-label="Experiment pages"><a href="./index.html" aria-current="page">Basic packing</a><a href="./green.html">Green packing</a></nav>
+    <nav class="lab-nav" aria-label="Experiment pages"><a href="./index.html" aria-current="page">Basic packing</a><a href="./green.html">Green packing</a><a href="./dynamic-green.html">Dynamic Green</a></nav>
     <div class="top-note">Interactive bin packing experiments · Unit-capacity bins</div>
   </header>
   <main class="workspace">
     <aside class="controls" aria-labelledby="config-title">
-      <div class="panel-heading"><div><p class="eyebrow">EXPERIMENT SETUP</p><h1 id="config-title">Design your experiment</h1></div><span class="edition">01 / 02</span><button id="advanced-toggle" class="advanced-toggle" type="button" aria-expanded="false">More settings</button></div>
+      <div class="panel-heading"><div><p class="eyebrow">EXPERIMENT SETUP</p><h1 id="config-title">Design your experiment</h1></div><span class="edition">01 / 03</span><button id="advanced-toggle" class="advanced-toggle" type="button" aria-expanded="false">More settings</button></div>
       <p class="intro">Both models use the same true job sizes and arrival order. Change the settings and rerun the experiment.</p>
       <form id="experiment-form">
         <section class="control-section" aria-labelledby="sample-heading">
@@ -54,6 +54,14 @@
           <div class="curve-frame"><svg id="probability-chart" viewBox="0 0 320 122" role="img" aria-label="Probability of choosing Hard mode by perceived job size"></svg></div>
           <p id="curve-error" class="form-error" role="status" hidden></p>
         </section>
+        <section class="control-section feedback-section" aria-labelledby="feedback-heading">
+          <h2 id="feedback-heading"><span>04</span> Feedback</h2>
+          <label class="feedback-toggle" for="feedback-enabled"><span>Include feedback in objective</span><input id="feedback-enabled" type="checkbox" role="switch" aria-describedby="feedback-description" /></label>
+          <label class="field feedback-coefficient-field" for="feedback-coefficient"><span>Feedback coefficient <small>c</small></span><input id="feedback-coefficient" type="number" min="0" step="any" value="1" required disabled /><em>Any nonnegative coefficient. Set c = 0 for zero feedback.</em></label>
+          <p class="feedback-formula">αⱼ = bⱼ × max(Xⱼ − s, 0) × c</p>
+          <p id="feedback-description" class="field-note">Xⱼ is the perceived size z used for mode selection, after judgment error and clipping. s is the Simple upper bound. bⱼ = 1 for Simple and 0 for Hard.</p>
+          <p class="field-note">Only Simple jobs with perceived size above s contribute feedback. Model 2 objective: bins + Σαⱼ. Turn feedback off to use bin count alone. Rerun to apply changes.</p>
+        </section>
         <button class="run-button" type="submit"><span aria-hidden="true">▶</span> Run random experiment</button>
         <p id="form-error" class="form-error" role="alert" hidden></p>
       </form>
@@ -62,8 +70,21 @@
       <div class="results-heading"><div><p class="eyebrow">PAIRED EXPERIMENT / COMPARISON</p><h2 id="results-heading">Bin count comparison</h2></div><div class="run-badge" id="run-badge">Ready to run</div></div>
       <div class="result-lead"><p>Both models use the selected algorithm and the same jobs in each trial. Model 1 packs true sizes; Model 2 packs reported sizes.</p></div>
       <div class="stat-row"><article class="stat-card stat-true"><div class="stat-label"><i></i>Model 1 · True sizes</div><div class="stat-value" id="true-mean">—</div><div class="stat-unit">Mean bins used</div></article><article class="stat-card stat-reported"><div class="stat-label"><i></i>Model 2 · Reported sizes</div><div class="stat-value" id="reported-mean">—</div><div class="stat-unit">Mean bins used</div></article><article class="stat-card stat-difference"><div class="stat-label">Paired difference · Model 2 − Model 1</div><div class="stat-value" id="difference-mean">—</div><div class="stat-unit" id="difference-note">Mean of within-trial differences</div></article></div>
+      <article class="chart-card feedback-results" aria-labelledby="objective-title">
+        <div class="chart-heading"><div><p class="eyebrow">RESULTS / BINS + FEEDBACK</p><h3 id="objective-title">Objective comparison</h3></div><span id="feedback-status" class="run-badge">Feedback off</span></div>
+        <p class="section-copy objective-description">J₂ = B₂ + Σαⱼ. Model 1 is the true-size reference: J₁ = B₁, with no feedback term. Lower objective values are better.</p>
+        <div class="stat-row feedback-stat-row">
+          <div class="feedback-stat"><div class="stat-label">Model 2 · Feedback Σαⱼ</div><div id="feedback-mean" class="stat-value">—</div><div class="stat-unit">Mean feedback total per trial</div></div>
+          <div class="feedback-stat"><div class="stat-label">Model 2 · Objective J₂</div><div id="objective-mean" class="stat-value">—</div><div class="stat-unit">Mean bins + feedback per trial</div></div>
+          <div class="feedback-stat"><div class="stat-label">Paired objective · J₂ − J₁</div><div id="objective-difference" class="stat-value">—</div><div id="objective-difference-note" class="stat-unit">Mean of within-trial objective differences</div></div>
+        </div>
+        <div id="objective-comparison" class="cost-chart" role="img" aria-label="Mean objective comparison for both models"></div>
+        <div class="legend objective-legend"><span><i class="true-dot"></i>Model 1 bins</span><span><i class="reported-dot"></i>Model 2 bins</span><span><i class="feedback-dot"></i>Feedback Σαⱼ</span></div>
+        <p id="feedback-summary" class="chart-caption">Feedback is off. Both objectives equal their bin counts.</p>
+      </article>
       <article class="chart-card" aria-labelledby="main-chart-title"><div class="chart-heading"><div><p class="eyebrow">RESULTS / BOX COUNT</p><h3 id="main-chart-title">Bin count distribution</h3></div><div class="legend"><span><i class="true-dot"></i>Model 1</span><span><i class="reported-dot"></i>Model 2</span></div></div><div id="main-chart" class="main-chart" role="img" aria-label="Distribution of bins used by both models"></div><p class="chart-caption">Lines show the 5th–95th percentile range; dots show means. Both models use the same jobs in each trial.</p></article>
-      <div class="bottom-grid"><article class="insight-card"><p class="eyebrow">PAIRED DIFFERENCE</p><h3>Bin count difference</h3><div id="difference-chart" class="difference-chart" role="img" aria-label="Distribution of Model 2 minus Model 1 bin counts"></div><p class="chart-caption">Positive values mean Model 2 uses more bins.</p></article><article class="model-card"><p class="eyebrow">EXPERIMENT RULES</p><h3>How to read this experiment</h3><div class="rule"><span class="rule-number">1</span><p>Each trial draws jobs with true sizes a between 0 and 1. Bins have capacity 1; a job opens a new bin if no eligible bin fits.</p></div><div class="rule"><span class="rule-number">2</span><p>Judgment error gives perceived size z = clip(a + ε, 0, 1). Hard mode is chosen with probability g(z); otherwise the job uses Simple mode.</p></div><div class="rule"><span class="rule-number">3</span><p>Simple reports min(tₛ, z), capped at tₛ. Hard reports max(tₗ, z), floored at tₗ.</p></div><div class="rule"><span class="rule-number">4</span><p id="selected-algorithm-rule">First Fit checks bins in opening order and uses the first one with room. Both models use this same placement rule.</p></div><div class="rule"><span class="rule-number">5</span><p>Model 1 packs true sizes; Model 2 packs reported sizes without checking true sizes. Compare their bin counts across paired trials.</p></div></article></div>
+      <div class="bottom-grid"><article class="insight-card"><p class="eyebrow">PAIRED DIFFERENCE</p><h3>Bin count difference</h3><div id="difference-chart" class="difference-chart" role="img" aria-label="Distribution of Model 2 minus Model 1 bin counts"></div><p class="chart-caption">Positive values mean Model 2 uses more bins.</p></article><article class="model-card"><p class="eyebrow">EXPERIMENT RULES</p><h3>How to read this experiment</h3><div class="rule"><span class="rule-number">1</span><p>Each trial draws jobs with true sizes a between 0 and 1. Bins have capacity 1; a job opens a new bin if no eligible bin fits.</p></div><div class="rule"><span class="rule-number">2</span><p>Judgment error gives perceived size z = clip(a + ε, 0, 1). Hard mode is chosen with probability g(z); otherwise the job uses Simple mode.</p></div><div class="rule"><span class="rule-number">3</span><p>Simple reports min(tₛ, z), capped at tₛ. Hard reports max(tₗ, z), floored at tₗ.</p></div><div class="rule"><span class="rule-number">4</span><p id="selected-algorithm-rule">First Fit checks bins in opening order and uses the first one with room. Both models use this same placement rule.</p></div><div class="rule"><span class="rule-number">5</span><p>Model 1 packs true sizes; Model 2 packs reported sizes without checking true sizes. Compare their bin counts across paired trials.</p></div><div class="rule"><span class="rule-number">6</span><p>Optional feedback uses perceived size Xⱼ = z: αⱼ = bⱼ × max(z − s, 0) × c. bⱼ is 1 for Simple and 0 for Hard. Add all jobs’ feedback to Model 2’s bin count; when feedback is off, αⱼ = 0.</p></div></article></div>
+      <article class="chart-card" aria-labelledby="sample-title"><p class="eyebrow">FIRST TRIAL / JOB VIEW</p><h3 id="sample-title">Job reports and placements</h3><div class="green-table-wrap job-preview"><table class="green-table"><thead><tr><th scope="col">Job</th><th scope="col">True a</th><th scope="col">Perceived z</th><th scope="col">Hard p</th><th scope="col">Mode</th><th scope="col">Reported r</th><th scope="col">Simple bⱼ</th><th scope="col">Feedback αⱼ</th><th scope="col">Model 1 bin</th><th scope="col">Model 2 bin</th></tr></thead><tbody id="sample-table"></tbody></table></div><p class="chart-caption">First 100 jobs of the first trial. Feedback uses Perceived z (Xⱼ in the formula); all αⱼ are zero when feedback is off. Objective totals include all jobs, not only this preview.</p></article>
       <p class="footnote">Trials are independent. Within each trial, both models share the true jobs and arrival order. Random Fit draws placement choices separately for each model. Experiment data stays in your browser.</p>
     </section>
   </main>

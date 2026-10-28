@@ -14,6 +14,7 @@
     step: "step(z-0.5)",
   };
   let runSequence = 0;
+  let lastResult = null;
 
   function parseSettings() {
     const settings = {
@@ -54,13 +55,18 @@
     const random = engine.seededRandom(settings.seed);
     const algorithms = [...engine.ALGORITHMS, "full-first-fit"];
     const totals = Object.fromEntries(algorithms.map((name) => [name, { total: 0, openingCost: 0, blackCost: 0, blackVolume: 0, bins: 0 }]));
+    let firstSample = null;
+    const firstAssignments = {};
     for (let trial = 0; trial < settings.trials; trial += 1) {
       const sample = engine.sampleTrial(settings, settings.probability, random);
+      if (trial === 0) firstSample = sample;
       for (const algorithm of algorithms) {
         const baseline = algorithm === "full-first-fit";
-        const loads = engine.pack(sample.reported, baseline ? "first-fit" : algorithm, baseline ? 1 : settings.effectiveCapacity);
+        const assignments = trial === 0 ? [] : null;
+        const loads = engine.pack(sample.reported, baseline ? "first-fit" : algorithm, baseline ? 1 : settings.effectiveCapacity, 10, assignments);
         const outcome = engine.cost(loads, settings.greenCapacity, settings.blackPrice);
         for (const key of Object.keys(totals[algorithm])) totals[algorithm][key] += outcome[key];
+        if (trial === 0) firstAssignments[algorithm] = assignments;
       }
       if (runId !== runSequence) throw new Error("A newer experiment has replaced this run.");
       onProgress(trial + 1, settings.trials);
@@ -69,7 +75,7 @@
     for (const algorithm of algorithms) {
       for (const key of Object.keys(totals[algorithm])) totals[algorithm][key] /= settings.trials;
     }
-    return { settings, totals };
+    return { settings, totals, firstSample, firstAssignments };
   }
 
   function drawProbabilityCurve() {
@@ -127,6 +133,7 @@
   }
 
   function render(result) {
+    lastResult = result;
     const { settings, totals } = result;
     const ordered = [...engine.ALGORITHMS].sort((a, b) => totals[a].total - totals[b].total);
     const bestName = ordered[0];
@@ -150,6 +157,18 @@
       const entry = totals[name];
       const label = name === "full-first-fit" ? "First Fit · full" : engine.LABELS[name];
       return `<tr${name === "full-first-fit" ? ' class="reference-row"' : ""}><th scope="row">${label}</th><td>${format(entry.total)}</td><td>${format(entry.bins, 1)}</td><td>${format(entry.blackVolume, 2)}</td></tr>`;
+    }).join("");
+    renderSampleTable(result, $("inspect-algorithm").value);
+  }
+
+  function renderSampleTable(result, algorithm) {
+    const { firstSample, firstAssignments, settings } = result;
+    const assignments = firstAssignments[algorithm];
+    $("sample-table").innerHTML = Array.from({ length: Math.min(100, firstSample.actual.length) }, (_, index) => {
+      const actual = firstSample.actual[index];
+      const perceived = firstSample.perceived[index];
+      const reported = firstSample.reported[index];
+      return `<tr><th scope="row">${index + 1}</th><td>${format(actual, 3)}</td><td>${format(perceived, 3)}</td><td>${format(100 * settings.probability(perceived), 1)}%</td><td>${firstSample.hardModes[index] ? "Hard" : "Simple"}</td><td>${format(reported, 3)}</td><td>${assignments[index]}</td></tr>`;
     }).join("");
   }
 
@@ -183,6 +202,7 @@
   }
 
   form.addEventListener("submit", (event) => { event.preventDefault(); executeFromForm(); });
+  $("inspect-algorithm").addEventListener("change", () => { if (lastResult) renderSampleTable(lastResult, $("inspect-algorithm").value); });
   $("advanced-toggle").addEventListener("click", () => {
     const expanded = $("advanced-toggle").getAttribute("aria-expanded") !== "true";
     $("advanced-toggle").setAttribute("aria-expanded", String(expanded));

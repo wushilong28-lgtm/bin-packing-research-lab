@@ -24,6 +24,7 @@
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
   const format = (value, decimals = 1) => value.toFixed(decimals);
   const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
+  const meanFeedback = (values) => values.reduce((average, value, index) => average + (value - average) / (index + 1), 0);
   const quantile = (sorted, p) => {
     const at = (sorted.length - 1) * p;
     const low = Math.floor(at);
@@ -32,7 +33,7 @@
   };
   const sortedCopy = (values) => [...values].sort((a, b) => a - b);
 
-  function firstFit(sizes) {
+  function firstFit(sizes, assignments) {
     let base = 1;
     while (base < sizes.length) base *= 2;
     const available = new Float64Array(base * 2);
@@ -50,6 +51,7 @@
         }
         available[node] = Math.max(0, available[node] - size);
       }
+      if (assignments && assignments.length < 100) assignments.push(node - base + 1);
       while (node > 1) {
         node = Math.floor(node / 2);
         available[node] = Math.max(available[node * 2], available[node * 2 + 1]);
@@ -58,7 +60,7 @@
     return opened;
   }
 
-  function nextFit(sizes) {
+  function nextFit(sizes, assignments) {
     let opened = 0;
     let remaining = 0;
     for (const size of sizes) {
@@ -68,11 +70,12 @@
       } else {
         remaining = Math.max(0, remaining - size);
       }
+      if (assignments && assignments.length < 100) assignments.push(opened);
     }
     return opened;
   }
 
-  function orderedFit(sizes, randomChoice) {
+  function orderedFit(sizes, randomChoice, assignments) {
     // A treap keeps open bins ordered by free space, then by opening order.
     const compare = (left, right) => left.remaining - right.remaining || left.order - right.order;
     const updateCount = (node) => {
@@ -165,6 +168,7 @@
         }
       }
       if (chosen) {
+        if (assignments && assignments.length < 100) assignments.push(chosen.order + 1);
         root = remove(root, chosen);
         chosen.remaining = Math.max(0, chosen.remaining - size);
         chosen.left = null;
@@ -172,6 +176,7 @@
         chosen.count = 1;
         root = insert(root, chosen);
       } else {
+        if (assignments && assignments.length < 100) assignments.push(opened + 1);
         root = insert(root, { remaining: 1 - size, order: opened, priority: priorityFor(opened), left: null, right: null, count: 1 });
         opened += 1;
       }
@@ -181,9 +186,9 @@
 
   const packers = {
     "first-fit": firstFit,
-    "best-fit": (sizes) => orderedFit(sizes, false),
+    "best-fit": (sizes, assignments) => orderedFit(sizes, false, assignments),
     "next-fit": nextFit,
-    "random-fit": (sizes) => orderedFit(sizes, true),
+    "random-fit": (sizes, assignments) => orderedFit(sizes, true, assignments),
   };
 
   function noise(type, scale) {
@@ -212,7 +217,10 @@
       hardThreshold: Number(raw.hardThreshold),
       errorType: String(raw.errorType),
       errorScale: Number(raw.errorScale),
+      feedbackEnabled: raw.feedbackEnabled ?? false,
+      feedbackCoefficient: Number(raw.feedbackCoefficient ?? 1),
     };
+    if (!settings.feedbackEnabled && (!Number.isFinite(settings.feedbackCoefficient) || settings.feedbackCoefficient < 0)) settings.feedbackCoefficient = 1;
     const checks = [
       [Number.isInteger(settings.jobs) && settings.jobs >= 500 && settings.jobs <= 5000, "Number of jobs must be an integer from 500 to 5000."],
       [Number.isInteger(settings.trials) && settings.trials >= 1 && settings.trials <= 300, "Number of trials must be an integer from 1 to 300."],
@@ -221,6 +229,8 @@
       [Number.isFinite(settings.hardThreshold) && settings.hardThreshold >= 0 && settings.hardThreshold <= 1, "Hard lower bound must be between 0 and 1."],
       [errorTypes.has(settings.errorType), "Choose a supported error distribution."],
       [Number.isFinite(settings.errorScale) && settings.errorScale >= 0 && settings.errorScale <= 1, "Error scale must be between 0 and 1."],
+      [typeof settings.feedbackEnabled === "boolean", "Choose whether feedback is on or off."],
+      [!settings.feedbackEnabled || (Number.isFinite(settings.feedbackCoefficient) && settings.feedbackCoefficient >= 0 && Number.isFinite(settings.feedbackCoefficient * settings.jobs + settings.jobs)), "Feedback coefficient c must be a finite nonnegative number small enough to keep the objective finite."],
     ];
     const failed = checks.find(([valid]) => !valid);
     if (failed) throw new Error(failed[1]);
@@ -238,6 +248,8 @@
       hardThreshold: $("hard-threshold").value,
       errorType: $("error-type").value,
       errorScale: $("error-scale").value,
+      feedbackEnabled: $("feedback-enabled").checked,
+      feedbackCoefficient: $("feedback-coefficient").value,
     });
   }
 
@@ -245,18 +257,36 @@
     const probability = window.compileProbabilityExpression(settings.probabilityExpression);
     const trueCounts = [];
     const reportedCounts = [];
+    const feedbackTotals = [];
+    const feedbackJobCounts = [];
+    let firstRows = [];
     for (let trial = 0; trial < settings.trials; trial += 1) {
       const actual = [];
       const reported = [];
+      const rows = [];
+      let feedbackTotal = 0;
+      let feedbackJobCount = 0;
       for (let job = 0; job < settings.jobs; job += 1) {
         const size = Math.random();
         const perceived = clamp(size + noise(settings.errorType, settings.errorScale), 0, 1);
-        const hard = Math.random() < probability(perceived);
+        const hardProbability = probability(perceived);
+        const hard = Math.random() < hardProbability;
+        const report = hard ? Math.max(settings.hardThreshold, perceived) : Math.min(settings.simpleThreshold, perceived);
+        // X_j in the feedback formula is perceived z, before min/max reporting.
+        const feedback = settings.feedbackEnabled && !hard ? Math.max(perceived - settings.simpleThreshold, 0) * settings.feedbackCoefficient : 0;
+        feedbackTotal += feedback;
+        if (feedback > 0) feedbackJobCount += 1;
         actual.push(size);
-        reported.push(hard ? Math.max(settings.hardThreshold, perceived) : Math.min(settings.simpleThreshold, perceived));
+        reported.push(report);
+        if (trial === 0 && rows.length < 100) rows.push({ id: job + 1, actual: size, perceived, hardProbability, hard, reported: report, simpleIndicator: Number(!hard), feedback });
       }
-      trueCounts.push(packers[settings.algorithm](actual));
-      reportedCounts.push(packers[settings.algorithm](reported));
+      const trueAssignments = trial === 0 ? [] : null;
+      const reportedAssignments = trial === 0 ? [] : null;
+      trueCounts.push(packers[settings.algorithm](actual, trueAssignments));
+      reportedCounts.push(packers[settings.algorithm](reported, reportedAssignments));
+      feedbackTotals.push(feedbackTotal);
+      feedbackJobCounts.push(feedbackJobCount);
+      if (trial === 0) firstRows = rows.map((row, index) => ({ ...row, trueBin: trueAssignments[index], reportedBin: reportedAssignments[index] }));
       if ((trial + 1) % 5 === 0 || trial + 1 === settings.trials) {
         if (runId !== runSequence) throw new Error("A newer experiment has replaced this run.");
         onProgress(trial + 1, settings.trials);
@@ -264,7 +294,13 @@
       }
     }
     const differences = reportedCounts.map((count, index) => count - trueCounts[index]);
-    return { settings, trueCounts, reportedCounts, differences, trueMean: mean(trueCounts), reportedMean: mean(reportedCounts), differenceMean: mean(differences) };
+    const reportedObjectives = reportedCounts.map((count, index) => count + feedbackTotals[index]);
+    const objectiveDifferences = reportedObjectives.map((objective, index) => objective - trueCounts[index]);
+    const trueMean = mean(trueCounts);
+    const reportedMean = mean(reportedCounts);
+    const differenceMean = mean(differences);
+    const feedbackMean = meanFeedback(feedbackTotals);
+    return { settings, trueCounts, reportedCounts, differences, firstRows, feedbackTotals, feedbackJobCounts, reportedObjectives, objectiveDifferences, trueMean, reportedMean, differenceMean, feedbackMean, feedbackJobMean: mean(feedbackJobCounts), objectiveMean: reportedMean + feedbackMean, objectiveDifferenceMean: differenceMean + feedbackMean };
   }
 
   function drawProbabilityCurve() {
@@ -354,6 +390,19 @@
     $("difference-chart").setAttribute("aria-label", `Across ${values.length} trials, Model 2 minus Model 1 ranges from ${Math.min(...values)} to ${Math.max(...values)} bins, with a mean of ${format(result.differenceMean)}.`);
   }
 
+  function renderFeedback(result) {
+    const signed = (value) => `${value > 0 ? "+" : ""}${format(value, 2)}`;
+    $("feedback-status").textContent = result.settings.feedbackEnabled ? `Feedback on · c = ${result.settings.feedbackCoefficient}` : "Feedback off";
+    $("feedback-mean").textContent = format(result.feedbackMean, 2);
+    $("objective-mean").textContent = format(result.objectiveMean, 2);
+    $("objective-difference").textContent = signed(result.objectiveDifferenceMean);
+    $("objective-difference-note").textContent = result.objectiveDifferenceMean > 0 ? "Model 2 has a higher mean objective" : result.objectiveDifferenceMean < 0 ? "Model 2 has a lower mean objective" : "Both models have the same mean objective";
+    const maximum = Math.max(result.trueMean, result.objectiveMean, 1);
+    $("objective-comparison").innerHTML = `<div class="cost-row"><span class="cost-name">Model 1 · J₁</span><div class="cost-track"><span class="objective-true" style="width:${result.trueMean / maximum * 100}%"></span></div><strong>${format(result.trueMean, 2)}</strong></div><div class="cost-row"><span class="cost-name">Model 2 · J₂</span><div class="cost-track"><span class="objective-reported" style="width:${result.reportedMean / maximum * 100}%"></span><span class="objective-feedback" style="width:${result.feedbackMean / maximum * 100}%"></span></div><strong>${format(result.objectiveMean, 2)}</strong></div>`;
+    $("objective-comparison").setAttribute("aria-label", `Mean objective: Model 1 ${format(result.trueMean, 2)}; Model 2 ${format(result.objectiveMean, 2)}, comprising ${format(result.reportedMean, 2)} bins and ${format(result.feedbackMean, 2)} feedback.`);
+    $("feedback-summary").textContent = result.settings.feedbackEnabled ? `Perceived-size feedback with s = ${result.settings.simpleThreshold}, c = ${result.settings.feedbackCoefficient}. Mean jobs with αⱼ > 0: ${format(result.feedbackJobMean)} of ${result.settings.jobs} per trial. Totals include every job in each trial.` : "Feedback is off: every αⱼ = 0, so each model’s objective equals its bin count.";
+  }
+
   function render(result) {
     $("true-mean").textContent = format(result.trueMean);
     $("reported-mean").textContent = format(result.reportedMean);
@@ -362,6 +411,8 @@
     $("difference-note").textContent = result.differenceMean > 0 ? "Reported-size model uses more bins on average" : result.differenceMean < 0 ? "Reported-size model uses fewer bins on average" : "Both models use the same mean number of bins";
     drawMainChart(result);
     drawDifferenceChart(result);
+    renderFeedback(result);
+    $("sample-table").innerHTML = result.firstRows.map((row) => `<tr><th scope="row">${row.id}</th><td>${format(row.actual, 3)}</td><td>${format(row.perceived, 3)}</td><td>${format(100 * row.hardProbability, 1)}%</td><td>${row.hard ? "Hard" : "Simple"}</td><td>${format(row.reported, 3)}</td><td>${row.simpleIndicator}</td><td>${format(row.feedback, 4)}</td><td>${row.trueBin}</td><td>${row.reportedBin}</td></tr>`).join("");
   }
 
   function showError(message) {
@@ -423,6 +474,10 @@
     $("selected-algorithm-rule").textContent = `${description} Both models use this same placement rule.`;
   }
 
+  function updateFeedbackControls() {
+    $("feedback-coefficient").disabled = !$("feedback-enabled").checked;
+  }
+
   form.addEventListener("submit", (event) => { event.preventDefault(); executeFromForm(); });
   $("advanced-toggle").addEventListener("click", () => {
     const expanded = $("advanced-toggle").getAttribute("aria-expanded") !== "true";
@@ -442,9 +497,11 @@
   });
   $("error-type").addEventListener("change", updateErrorDescription);
   $("packing-algorithm").addEventListener("change", updateAlgorithmDescription);
+  $("feedback-enabled").addEventListener("change", updateFeedbackControls);
   drawProbabilityCurve();
   updateErrorDescription();
   updateAlgorithmDescription();
+  updateFeedbackControls();
   executeFromForm();
 
   // Browser agents can run the same visible experiment without a separate backend.
@@ -460,6 +517,8 @@
         hardThreshold: { type: "number", minimum: 0, maximum: 1 },
         errorType: { type: "string", enum: [...errorTypes] },
         errorScale: { type: "number", minimum: 0, maximum: 1 },
+        feedbackEnabled: { type: "boolean", default: false },
+        feedbackCoefficient: { type: "number", minimum: 0, default: 1 },
       },
       required: ["jobs", "trials", "algorithm", "probabilityExpression", "simpleThreshold", "hardThreshold", "errorType", "errorScale"],
       additionalProperties: false,
@@ -468,19 +527,21 @@
       Promise.resolve(document.modelContext.registerTool({
         name: "run_bin_packing_experiment",
         title: "Run bin packing experiment",
-        description: "Run paired randomized bin packing trials with the selected algorithm and update the charts.",
+        description: "Run paired randomized bin packing trials and update bin-count and optional perceived-size feedback objectives.",
         inputSchema: schema,
         annotations: { readOnlyHint: false, untrustedContentHint: false },
         async execute(input) {
           const settings = validate(input);
-          const mapping = { jobs: "job-count", trials: "trial-count", algorithm: "packing-algorithm", probabilityExpression: "probability-expression", simpleThreshold: "simple-threshold", hardThreshold: "hard-threshold", errorType: "error-type", errorScale: "error-scale" };
+          const mapping = { jobs: "job-count", trials: "trial-count", algorithm: "packing-algorithm", probabilityExpression: "probability-expression", simpleThreshold: "simple-threshold", hardThreshold: "hard-threshold", errorType: "error-type", errorScale: "error-scale", feedbackCoefficient: "feedback-coefficient" };
           Object.entries(mapping).forEach(([key, id]) => { $(id).value = settings[key]; });
+          $("feedback-enabled").checked = settings.feedbackEnabled;
           $("probability-expression").dispatchEvent(new Event("input"));
           updateErrorDescription();
           updateAlgorithmDescription();
+          updateFeedbackControls();
           drawProbabilityCurve();
           const result = await executeSettings(settings);
-          return { trueMean: result.trueMean, reportedMean: result.reportedMean, differenceMean: result.differenceMean, trials: settings.trials };
+          return { trueMean: result.trueMean, reportedMean: result.reportedMean, differenceMean: result.differenceMean, feedbackMean: result.feedbackMean, feedbackJobMean: result.feedbackJobMean, objectiveMean: result.objectiveMean, objectiveDifferenceMean: result.objectiveDifferenceMean, feedbackEnabled: settings.feedbackEnabled, feedbackCoefficient: settings.feedbackCoefficient, trials: settings.trials };
         },
       })).catch(() => {});
     } catch (_) { /* The normal page works without WebMCP. */ }
