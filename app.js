@@ -17,8 +17,12 @@
     "best-fit": "Best Fit chooses the open bin that leaves the least unused space; ties go to the oldest bin.",
     "next-fit": "Next Fit tries only the current bin. If the job does not fit, it opens a new bin and never returns to earlier bins.",
     "random-fit": "Random Fit chooses uniformly among all open bins with room. If none fits, it opens a new bin.",
+    "two-layer-ff": "双层 FF first places threshold Simple (r = s) into an eligible existing ordinary Hard bin, in opening order; only then reserves it if needed. Threshold Hard (r = h) first matches a reserved Simple, otherwise uses ordinary First Fit. Other jobs and Simple overflow use the ordinary pool.",
+    "two-layer-bf": "双层 BF first places threshold Simple (r = s) into an eligible existing ordinary Hard bin, by best fit; only then reserves it if needed. Threshold Hard (r = h) first matches a reserved Simple, otherwise uses ordinary Best Fit. Other jobs and Simple overflow use the ordinary pool.",
   };
-  const algorithmLabels = { "first-fit": "First Fit", "best-fit": "Best Fit", "next-fit": "Next Fit", "random-fit": "Random Fit" };
+  const algorithmLabels = { "first-fit": "First Fit", "best-fit": "Best Fit", "next-fit": "Next Fit", "random-fit": "Random Fit", "two-layer-ff": "双层 FF", "two-layer-bf": "双层 BF" };
+  const isTwoLayer = (algorithm) => algorithm === "two-layer-ff" || algorithm === "two-layer-bf";
+  const baselineAlgorithm = (algorithm) => algorithm === "two-layer-ff" ? "first-fit" : algorithm === "two-layer-bf" ? "best-fit" : algorithm;
   let runSequence = 0;
 
   const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
@@ -33,14 +37,20 @@
   };
   const sortedCopy = (values) => [...values].sort((a, b) => a - b);
 
-  function firstFit(sizes, assignments) {
+  function firstFit(sizes, assignments, random, capacity = sizes.length) {
     let base = 1;
-    while (base < sizes.length) base *= 2;
+    while (base < capacity) base *= 2;
     const available = new Float64Array(base * 2);
     let opened = 0;
-    for (const size of sizes) {
+    for (const item of sizes) {
+      const size = typeof item === "number" ? item : item.size;
+      const forcedBin = typeof item === "number" ? null : item.bin;
       let node;
-      if (opened === 0 || available[1] + 1e-12 < size) {
+      if (forcedBin != null) {
+        if (!Number.isInteger(forcedBin) || forcedBin < 1 || forcedBin > opened || available[base + forcedBin - 1] + 1e-12 < size) throw new Error("Directed First Fit placement needs a fitting existing bin.");
+        node = base + forcedBin - 1;
+        available[node] = Math.max(0, available[node] - size);
+      } else if (opened === 0 || available[1] + 1e-12 < size) {
         node = base + opened;
         opened += 1;
         available[node] = 1 - size;
@@ -75,7 +85,7 @@
     return opened;
   }
 
-  function orderedFit(sizes, randomChoice, assignments) {
+  function orderedFit(sizes, randomChoice, assignments, random = Math.random) {
     // A treap keeps open bins ordered by free space, then by opening order.
     const compare = (left, right) => left.remaining - right.remaining || left.order - right.order;
     const updateCount = (node) => {
@@ -130,10 +140,16 @@
     };
     let root = null;
     let opened = 0;
-    for (const size of sizes) {
+    const nodes = [];
+    for (const item of sizes) {
+      const size = typeof item === "number" ? item : item.size;
+      const forcedBin = typeof item === "number" ? null : item.bin;
       let current;
       let chosen = null;
-      if (randomChoice) {
+      if (forcedBin != null) {
+        chosen = nodes[forcedBin - 1];
+        if (!Number.isInteger(forcedBin) || !chosen || chosen.remaining + 1e-12 < size) throw new Error("Directed Best Fit placement needs a fitting existing bin.");
+      } else if (randomChoice) {
         const cutoff = size - 1e-12;
         let below = 0;
         current = root;
@@ -147,7 +163,7 @@
         }
         const eligible = (root?.count ?? 0) - below;
         if (eligible > 0) {
-          let rank = below + Math.floor(Math.random() * eligible);
+          let rank = below + Math.floor(random() * eligible);
           current = root;
           while (current) {
             const leftCount = current.left?.count ?? 0;
@@ -177,10 +193,108 @@
         root = insert(root, chosen);
       } else {
         if (assignments && assignments.length < 100) assignments.push(opened + 1);
-        root = insert(root, { remaining: 1 - size, order: opened, priority: priorityFor(opened), left: null, right: null, count: 1 });
+        const node = { remaining: 1 - size, order: opened, priority: priorityFor(opened), left: null, right: null, count: 1 };
+        nodes.push(node);
+        root = insert(root, node);
         opened += 1;
       }
     }
+    return opened;
+  }
+
+  function twoLayerFit(jobs, assignments, capacity, settings, ordinaryFit, stats = {}, preferBestFit = false) {
+    const limit = settings.reservationLimit ?? 10;
+    let opened = 0, waiting = 0, currentJob, ordinaryRoute;
+    const pendingSimple = [];
+    let simpleHead = 0;
+    const ordinaryBins = new Map();
+    const hardCandidates = [];
+    const compareCandidates = (a, b) => (preferBestFit ? a.remaining - b.remaining : 0) || a.localBin - b.localBin;
+    const pushCandidate = (entry) => {
+      let at = hardCandidates.length;
+      hardCandidates.push(entry);
+      while (at > 0) {
+        const parent = Math.floor((at - 1) / 2);
+        if (compareCandidates(hardCandidates[parent], entry) <= 0) break;
+        hardCandidates[at] = hardCandidates[parent]; at = parent;
+      }
+      hardCandidates[at] = entry;
+    };
+    const popCandidate = () => {
+      const last = hardCandidates.pop();
+      if (!hardCandidates.length) return;
+      let at = 0;
+      while (at * 2 + 1 < hardCandidates.length) {
+        let child = at * 2 + 1;
+        if (child + 1 < hardCandidates.length && compareCandidates(hardCandidates[child + 1], hardCandidates[child]) < 0) child += 1;
+        if (compareCandidates(last, hardCandidates[child]) <= 0) break;
+        hardCandidates[at] = hardCandidates[child]; at = child;
+      }
+      hardCandidates[at] = last;
+    };
+    const availableHardBin = () => {
+      while (hardCandidates.length) {
+        const candidate = hardCandidates[0], bin = ordinaryBins.get(candidate.localBin);
+        if (candidate.remaining === bin.remaining && bin.remaining + 1e-12 >= settings.simpleThreshold) return candidate.localBin;
+        popCandidate();
+      }
+      return null;
+    };
+    Object.assign(stats, { pairs: 0, ordinaryHardFills: 0, unmatched: 0, overflow: 0, ordinaryBins: 0, thresholdSimple: 0, thresholdHard: 0, peakReserved: 0 });
+    const record = (job, bin, layer) => {
+      if (assignments && assignments.length < 100) assignments.push(bin);
+      if (job.row) job.row.placementLayer = layer;
+    };
+    // The proxy translates local ordinary-pool IDs into global opening-order IDs.
+    // Its length stays zero so the base packer reports every placement, not just 100.
+    const ordinaryAssignments = { length: 0, push(localBin) {
+      if (!ordinaryBins.has(localBin)) ordinaryBins.set(localBin, { globalBin: ++opened, remaining: 1, hard: false });
+      const bin = ordinaryBins.get(localBin), wasHard = bin.hard, beforeRemaining = bin.remaining;
+      bin.remaining = Math.max(0, bin.remaining - currentJob.size);
+      bin.hard ||= currentJob.hard;
+      // A bin acquires Hard at most once (h > 1/2). Any later load only
+      // decreases capacity; stale heap entries are discarded when queried.
+      if (bin.hard && bin.remaining + 1e-12 >= settings.simpleThreshold && (!wasHard || beforeRemaining !== bin.remaining)) pushCandidate({ localBin, remaining: bin.remaining });
+      record(currentJob, bin.globalBin, ordinaryRoute);
+    } };
+    function* ordinaryJobs() {
+      for (const job of jobs) {
+        // Exact equality is intentional: nearby, unstandardized sizes are not atoms.
+        const side = !job.hard && job.size === settings.simpleThreshold ? "simple"
+          : job.hard && job.size === settings.hardThreshold ? "hard" : null;
+        if (side) {
+          stats[side === "simple" ? "thresholdSimple" : "thresholdHard"] += 1;
+          if (side === "simple" && limit > 0) {
+            const existingHard = availableHardBin();
+            if (existingHard !== null) {
+              currentJob = job; ordinaryRoute = "Ordinary Hard bin · filled before reservation";
+              stats.ordinaryHardFills += 1;
+              yield { size: job.size, bin: existingHard };
+              continue;
+            }
+          }
+          if (side === "hard" && waiting > 0) {
+            const bin = pendingSimple[simpleHead++];
+            waiting -= 1; stats.pairs += 1;
+            record(job, bin, "Threshold pair · completed");
+            continue;
+          }
+          if (side === "simple" && waiting < limit) {
+            const bin = ++opened;
+            pendingSimple.push(bin); waiting += 1;
+            stats.peakReserved = Math.max(stats.peakReserved, waiting);
+            record(job, bin, "Threshold Simple reservation · opened");
+            continue;
+          }
+          if (side === "simple") stats.overflow += 1;
+        }
+        currentJob = job;
+        ordinaryRoute = "Ordinary pool";
+        yield job.size; // Base FF/BF places this job before the next submission.
+      }
+    }
+    stats.ordinaryBins = ordinaryFit(ordinaryJobs(), ordinaryAssignments, undefined, capacity);
+    stats.unmatched = waiting;
     return opened;
   }
 
@@ -188,30 +302,34 @@
     "first-fit": firstFit,
     "best-fit": (sizes, assignments) => orderedFit(sizes, false, assignments),
     "next-fit": nextFit,
-    "random-fit": (sizes, assignments) => orderedFit(sizes, true, assignments),
+    "random-fit": (sizes, assignments, random) => orderedFit(sizes, true, assignments, random),
+    "two-layer-ff": (jobs, assignments, random, capacity, settings, stats) => twoLayerFit(jobs, assignments, capacity, settings, firstFit, stats),
+    "two-layer-bf": (jobs, assignments, random, capacity, settings, stats) => twoLayerFit(jobs, assignments, capacity, settings, (sizes, bins) => orderedFit(sizes, false, bins), stats, true),
   };
 
-  function noise(type, scale) {
+  function noise(type, scale, random = Math.random) {
     if (type === "none" || scale === 0) return 0;
-    if (type === "uniform") return (2 * Math.random() - 1) * scale;
-    if (type === "triangular") return (Math.random() - Math.random()) * scale;
-    if (type === "cauchy") return scale * Math.tan(Math.PI * (Math.random() - 0.5));
-    if (type === "exponential") return scale * (-Math.log(Math.max(Number.MIN_VALUE, 1 - Math.random())) - 1);
-    if (type === "two-point") return Math.random() < 0.5 ? -scale : scale;
+    if (type === "uniform") return (2 * random() - 1) * scale;
+    if (type === "triangular") return (random() - random()) * scale;
+    if (type === "cauchy") return scale * Math.tan(Math.PI * (random() - 0.5));
+    if (type === "exponential") return scale * (-Math.log(Math.max(Number.MIN_VALUE, 1 - random())) - 1);
+    if (type === "two-point") return random() < 0.5 ? -scale : scale;
     if (type === "laplace") {
-      const u = Math.random() - 0.5;
+      const u = random() - 0.5;
       return -scale * Math.sign(u) * Math.log(1 - 2 * Math.abs(u));
     }
-    const u1 = Math.max(Number.MIN_VALUE, Math.random());
-    const u2 = Math.random();
+    const u1 = Math.max(Number.MIN_VALUE, random());
+    const u2 = random();
     return scale * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   }
 
   function validate(raw) {
     const settings = {
+      ...window.StaticBehavior.settings(raw),
       jobs: Number(raw.jobs),
       trials: Number(raw.trials),
       algorithm: String(raw.algorithm),
+      reservationLimit: Number(raw.reservationLimit ?? 10),
       probabilityExpression: String(raw.probabilityExpression),
       simpleThreshold: Number(raw.simpleThreshold),
       hardThreshold: Number(raw.hardThreshold),
@@ -225,6 +343,8 @@
       [Number.isInteger(settings.jobs) && settings.jobs >= 500 && settings.jobs <= 5000, "Number of jobs must be an integer from 500 to 5000."],
       [Number.isInteger(settings.trials) && settings.trials >= 1 && settings.trials <= 300, "Number of trials must be an integer from 1 to 300."],
       [Object.hasOwn(packers, settings.algorithm), "Choose a supported placement algorithm."],
+      [!isTwoLayer(settings.algorithm) || (Number.isInteger(settings.reservationLimit) && settings.reservationLimit >= 0 && settings.reservationLimit <= 5000), "Reservation limit K must be an integer from 0 to 5000."],
+      [!isTwoLayer(settings.algorithm) || (settings.simpleThreshold > 0 && settings.simpleThreshold < 0.5 && settings.hardThreshold > 0.5 && settings.hardThreshold < 1 && Math.abs(settings.simpleThreshold + settings.hardThreshold - 1) <= 1e-12), "双层 FF/BF requires 0 < s < 0.5 and h = 1 − s. Use the complementary-bounds button or adjust Reported size."],
       [Number.isFinite(settings.simpleThreshold) && settings.simpleThreshold >= 0 && settings.simpleThreshold <= 1, "Simple upper bound must be between 0 and 1."],
       [Number.isFinite(settings.hardThreshold) && settings.hardThreshold >= 0 && settings.hardThreshold <= 1, "Hard lower bound must be between 0 and 1."],
       [errorTypes.has(settings.errorType), "Choose a supported error distribution."],
@@ -240,9 +360,11 @@
 
   function settingsFromForm() {
     return validate({
+      ...behaviorFromForm(),
       jobs: $("job-count").value,
       trials: $("trial-count").value,
       algorithm: $("packing-algorithm").value,
+      reservationLimit: $("reservation-limit").value,
       probabilityExpression: $("probability-expression").value,
       simpleThreshold: $("simple-threshold").value,
       hardThreshold: $("hard-threshold").value,
@@ -254,39 +376,77 @@
   }
 
   async function runSimulation(settings, onProgress, runId) {
+    const behavior = window.StaticBehavior;
+    settings = { ...behavior.defaults, ...settings };
     const probability = window.compileProbabilityExpression(settings.probabilityExpression);
-    const trueCounts = [];
-    const reportedCounts = [];
-    const feedbackTotals = [];
-    const feedbackJobCounts = [];
-    let firstRows = [];
+    const trueCounts = [], reportedCounts = [], feedbackTotals = [], feedbackJobCounts = [];
+    const finalRates = [], rounds = [], reservationTrials = [], reportedBaselineCounts = [];
+    const userTotals = { jobs: 0, hard: 0, observedSimple: 0, failures: 0 };
+    let firstRows = [], firstUser = null, firstSizes = [], firstReportedSizes = [];
     for (let trial = 0; trial < settings.trials; trial += 1) {
-      const actual = [];
-      const reported = [];
-      const rows = [];
-      let feedbackTotal = 0;
-      let feedbackJobCount = 0;
-      for (let job = 0; job < settings.jobs; job += 1) {
-        const size = Math.random();
-        const perceived = clamp(size + noise(settings.errorType, settings.errorScale), 0, 1);
-        const hardProbability = probability(perceived);
-        const hard = Math.random() < hardProbability;
-        const report = hard ? Math.max(settings.hardThreshold, perceived) : Math.min(settings.simpleThreshold, perceived);
-        // X_j in the feedback formula is perceived z, before min/max reporting.
-        const feedback = settings.feedbackEnabled && !hard ? Math.max(perceived - settings.simpleThreshold, 0) * settings.feedbackCoefficient : 0;
-        feedbackTotal += feedback;
-        if (feedback > 0) feedbackJobCount += 1;
-        actual.push(size);
-        reported.push(report);
-        if (trial === 0 && rows.length < 100) rows.push({ id: job + 1, actual: size, perceived, hardProbability, hard, reported: report, simpleIndicator: Number(!hard), feedback });
-      }
+      const seeded = String(settings.seed) !== "";
+      const baseSeed = (Number(settings.seed) + Math.imul(trial + 1, 0x9e3779b9)) >>> 0;
+      const sampleRandom = seeded ? behavior.rng(baseSeed) : Math.random;
+      const modeRandom = seeded ? behavior.rng(baseSeed ^ 0xa5a5a5a5) : Math.random;
+      const trueRandom = seeded ? behavior.rng(baseSeed ^ 0xb6b6b6b6) : Math.random;
+      const reportRandom = seeded ? behavior.rng(baseSeed ^ 0xc7c7c7c7) : Math.random;
+      // Placement randomness cannot change exogenous jobs, perception or mode draws.
+      const inputs = Array.from({ length: settings.jobs }, () => {
+        const actual = behavior.sampleSize(settings, sampleRandom);
+        const perceived = clamp(actual + noise(settings.errorType, settings.errorScale, sampleRandom), 0, 1);
+        return { actual, perceived, draw: modeRandom(), baseProbability: probability(perceived) };
+      });
+      const actual = inputs.map(job => job.actual), reported = [], rows = [];
+      const user = behavior.createUser(settings);
+      let feedbackTotal = 0, feedbackJobCount = 0;
       const trueAssignments = trial === 0 ? [] : null;
       const reportedAssignments = trial === 0 ? [] : null;
-      trueCounts.push(packers[settings.algorithm](actual, trueAssignments));
-      reportedCounts.push(packers[settings.algorithm](reported, reportedAssignments));
-      feedbackTotals.push(feedbackTotal);
-      feedbackJobCounts.push(feedbackJobCount);
-      if (trial === 0) firstRows = rows.map((row, index) => ({ ...row, trueBin: trueAssignments[index], reportedBin: reportedAssignments[index] }));
+      function* submissions() {
+        for (let job = 0; job < settings.jobs; job += 1) {
+          const input = inputs[job], perceived = input.perceived;
+          const decision = behavior.chooseMode(user, input.baseProbability, settings.feedbackEnabled, input.draw);
+          const hard = decision.hard;
+          // The merchant standardizes only AFTER the user's mode draw.
+          const report = hard ? Math.max(settings.hardThreshold, perceived) : Math.min(settings.simpleThreshold, perceived);
+          const shortfall = Math.max(perceived - report, 0);
+          const qualityFailed = settings.feedbackEnabled && shortfall > 0;
+          const feedback = settings.feedbackEnabled ? shortfall * settings.feedbackCoefficient : 0;
+          feedbackTotal += feedback; feedbackJobCount += Number(feedback > 0);
+          reported.push(report);
+          const row = { id: job + 1, userId: 1, submission: job + 1, actual: input.actual, perceived,
+            baseProbability: decision.baseProbability, hardProbability: decision.hardProbability, draw: decision.draw,
+            lambda: user.lambda, hard, reported: report, simpleIndicator: Number(!hard), feedback,
+            qualityFailed, expectedBefore: decision.expectedBefore,
+            observationsBefore: decision.observationsBefore, failuresBefore: decision.failuresBefore };
+          if (trial === 0 && rows.length < 100) rows.push(row);
+          yield isTwoLayer(settings.algorithm) ? { size: report, hard, row } : report; // Receive the quality outcome only after placement completes.
+          behavior.receiveFeedback(user, { hard, feedback, qualityFailed }, settings.feedbackEnabled);
+          row.expectedAfter = user.q;
+          row.observedSimple = user.observedSimple;
+          row.failures = user.failures;
+          if (!rounds[job]) rounds[job] = { jobs: 0, hard: 0, baseProbability: 0, hardProbability: 0, qBefore: 0 };
+          const bucket = rounds[job];
+          bucket.jobs += 1; bucket.hard += Number(hard);
+          bucket.baseProbability += decision.baseProbability; bucket.hardProbability += decision.hardProbability;
+          bucket.qBefore += decision.expectedBefore;
+        }
+      }
+      const reservationStats = {};
+      const reportedCount = packers[settings.algorithm](submissions(), reportedAssignments, reportRandom, settings.jobs, settings, reservationStats);
+      const trueCount = packers[baselineAlgorithm(settings.algorithm)](actual, trueAssignments, trueRandom);
+      if (isTwoLayer(settings.algorithm)) {
+        reservationTrials.push(reservationStats);
+        reportedBaselineCounts.push(packers[baselineAlgorithm(settings.algorithm)](reported));
+      }
+      trueCounts.push(trueCount); reportedCounts.push(reportedCount);
+      feedbackTotals.push(feedbackTotal); feedbackJobCounts.push(feedbackJobCount);
+      finalRates.push(user.q);
+      userTotals.jobs += user.submissions; userTotals.hard += user.hardCount;
+      userTotals.observedSimple += user.observedSimple; userTotals.failures += user.failures;
+      if (trial === 0) {
+        firstRows = rows.map((row, index) => ({ ...row, trueBin: trueAssignments[index], reportedBin: reportedAssignments[index] }));
+        firstUser = { ...user }; firstSizes = actual; firstReportedSizes = reported;
+      }
       if ((trial + 1) % 5 === 0 || trial + 1 === settings.trials) {
         if (runId !== runSequence) throw new Error("A newer experiment has replaced this run.");
         onProgress(trial + 1, settings.trials);
@@ -296,11 +456,121 @@
     const differences = reportedCounts.map((count, index) => count - trueCounts[index]);
     const reportedObjectives = reportedCounts.map((count, index) => count + feedbackTotals[index]);
     const objectiveDifferences = reportedObjectives.map((objective, index) => objective - trueCounts[index]);
-    const trueMean = mean(trueCounts);
-    const reportedMean = mean(reportedCounts);
-    const differenceMean = mean(differences);
-    const feedbackMean = meanFeedback(feedbackTotals);
-    return { settings, trueCounts, reportedCounts, differences, firstRows, feedbackTotals, feedbackJobCounts, reportedObjectives, objectiveDifferences, trueMean, reportedMean, differenceMean, feedbackMean, feedbackJobMean: mean(feedbackJobCounts), objectiveMean: reportedMean + feedbackMean, objectiveDifferenceMean: differenceMean + feedbackMean };
+    const trueMean = mean(trueCounts), reportedMean = mean(reportedCounts), differenceMean = mean(differences), feedbackMean = meanFeedback(feedbackTotals);
+    const reservationMeans = reservationTrials.length ? Object.fromEntries(Object.keys(reservationTrials[0]).map(key => [key, mean(reservationTrials.map(stats => stats[key]))])) : null;
+    return { settings, trueCounts, reportedCounts, differences, firstRows, firstUser, firstSizes, firstReportedSizes, reservationTrials, reservationMeans,
+      reportedBaselineCounts, reportedBaselineMean: reportedBaselineCounts.length ? mean(reportedBaselineCounts) : null,
+      userTotals, rounds, finalRates, finalRateMean: mean(finalRates), hardShare: userTotals.hard / userTotals.jobs,
+      feedbackTotals, feedbackJobCounts, reportedObjectives, objectiveDifferences,
+      trueMean, reportedMean, differenceMean, feedbackMean, feedbackJobMean: mean(feedbackJobCounts),
+      objectiveMean: reportedMean + feedbackMean, objectiveDifferenceMean: differenceMean + feedbackMean };
+  }
+
+  const behaviorFields = {
+    sizeDistribution: "size-distribution", sizeMin: "size-min", sizeMax: "size-max", sizeMean: "size-mean", sizeStd: "size-std",
+    betaAlpha: "beta-alpha", betaBeta: "beta-beta", sizeRate: "size-rate", mixtureWeight: "mixture-weight",
+    mixtureLow: "mixture-low", mixtureHigh: "mixture-high", mixtureStd: "mixture-std", seed: "random-seed",
+    lambda: "user-lambda",
+  };
+  const distributionFields = {
+    uniform: ["size-min", "size-max"], normal: ["size-mean", "size-std"], beta: ["beta-alpha", "beta-beta"],
+    exponential: ["size-rate"], bimodal: ["mixture-low", "mixture-high", "mixture-std", "mixture-weight"],
+  };
+  const distributionNames = { uniform: "Uniform", normal: "Truncated Gaussian", beta: "Beta", exponential: "Truncated exponential", bimodal: "Two-cluster Gaussian mixture" };
+  function behaviorFromForm() {
+    return Object.fromEntries(Object.entries(behaviorFields).map(([key, id]) => [key,
+      typeof window.StaticBehavior.defaults[key] === "boolean" ? Boolean($(id).checked) : $(id).value]));
+  }
+  function applyBehaviorToForm(settings) {
+    for (const [key, id] of Object.entries(behaviorFields)) {
+      if (typeof settings[key] === "boolean") $(id).checked = settings[key]; else $(id).value = settings[key];
+    }
+    updateDistributionControls();
+  }
+  function behaviorSchema() {
+    const properties = {};
+    for (const [key, value] of Object.entries(window.StaticBehavior.defaults)) properties[key] = { type: typeof value, default: value };
+    properties.sizeDistribution.enum = [...window.StaticBehavior.distributions];
+    properties.lambda.minimum = 0; properties.lambda.maximum = 1;
+    properties.seed.description = "Blank for fresh randomness, or a 32-bit unsigned integer as text.";
+    return properties;
+  }
+  function updateDistributionControls() {
+    const chosen = $("size-distribution").value;
+    for (const [name, ids] of Object.entries(distributionFields)) {
+      $("distribution-" + name).hidden = name !== chosen;
+      for (const id of ids) $(id).disabled = name !== chosen;
+    }
+    const description = {
+      uniform: "Equal density between the chosen minimum and maximum.",
+      normal: "Draw from N(μ, σ²) conditional on [0, 1]. Out-of-range samples are redrawn, not clipped. Parameters describe the underlying Gaussian.",
+      beta: "Beta(α, β) on [0, 1]. α = β gives a symmetric distribution; α < β favors smaller jobs; α > β favors larger jobs.",
+      exponential: "Exponential(rate λ) conditional on [0, 1]. Larger λ concentrates jobs closer to zero.",
+      bimodal: "Choose the low cluster with the specified share, then sample its Gaussian conditional on [0, 1]. Both clusters use the same standard deviation.",
+    };
+    $("distribution-description").textContent = description[chosen] || "Choose a true-size distribution.";
+  }
+  function updateBehaviorControls() {
+    const feedback = Boolean($("feedback-enabled").checked);
+    $("user-lambda").disabled = !feedback;
+    $("user-response-note").textContent = feedback
+      ? "One user submits all N jobs in order. λ = 0 keeps the base probability; λ = 1 gives the strongest response to past quality shortfalls."
+      : "Feedback off: Hard is drawn with g₀(z). λ is retained but inactive; no quality history or penalty is used.";
+  }
+  function renderBehavior(result) {
+    const { settings: s, firstUser: user, userTotals: totals } = result;
+    $("learning-status").textContent = s.feedbackEnabled ? `Feedback on · λ = ${s.lambda}` : "Feedback off · g₀(z)";
+    $("hard-share").textContent = `${format(result.hardShare * 100, 1)}%`;
+    $("final-q-mean").textContent = `${format(result.finalRateMean * 100, 1)}%`;
+    $("user-history-summary").textContent = s.feedbackEnabled
+      ? `Across all ${s.trials} trials: ${totals.failures} shortfalls / ${totals.observedSimple} observed Simple jobs. Final q above is the mean of each trial's final ratio, with zero used when no Simple was observed.`
+      : "History is disabled and q stays 0. Choices use g₀(z); the objective equals the reported-size bin count.";
+    $("user-memory-table").innerHTML = `<tr><th scope="row">U1</th><td>${format(user.lambda, 3)}</td><td>${user.submissions}</td><td>${user.hardCount}</td><td>${user.observedSimple}</td><td>${user.failures}</td><td>${format(user.q * 100, 1)}%</td></tr>`;
+    drawLearningChart(result);
+    drawSizeHistogram(result);
+  }
+  function drawLearningChart(result) {
+    const rounds = result.rounds, width = 760, height = 214, L = 46, R = 18, T = 20, B = 178;
+    const stride = Math.max(1, Math.ceil(rounds.length / 60));
+    let svg = `<svg viewBox="0 0 ${width} ${height}" aria-hidden="true">`;
+    for (const p of [0, 0.5, 1]) {
+      const y = B - p * (B - T);
+      svg += `<line x1="${L}" y1="${y}" x2="${width-R}" y2="${y}" stroke="#e2eae7"/><text x="${L-8}" y="${y+4}" text-anchor="end" fill="#758b90" font-size="11">${p*100}%</text>`;
+    }
+    for (const [key, color, dash] of [["baseProbability", "#117890", "5 4"], ["hardProbability", "#d79a2d", ""], ["qBefore", "#8c6bb0", ""]]) {
+      let path = "";
+      for (let start = 0; start < rounds.length; start += stride) {
+        const group = rounds.slice(start, start + stride);
+        const jobs = group.reduce((n, bucket) => n + bucket.jobs, 0);
+        const value = group.reduce((n, bucket) => n + bucket[key], 0) / jobs;
+        const mid = (start + Math.min(rounds.length-1, start + stride-1)) / 2;
+        const x = L + mid / Math.max(1, rounds.length-1) * (width-L-R), y = B - value * (B-T);
+        path += `${path ? "L" : "M"}${x.toFixed(2)} ${y.toFixed(2)} `;
+      }
+      svg += `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"${dash ? ` stroke-dasharray="${dash}"` : ""}/>`;
+    }
+    svg += `<text x="${L}" y="202" fill="#758b90" font-size="11">1</text><text x="${width-R}" y="202" text-anchor="end" fill="#758b90" font-size="11">${rounds.length}</text><text x="${width/2}" y="205" text-anchor="middle" fill="#758b90" font-size="12">Submission number · one user</text></svg>`;
+    $("learning-chart").innerHTML = svg;
+    $("learning-chart-note").textContent = `Base g₀(z), adjusted Hard probability and q before selection, averaged across ${result.settings.trials} independent trials. Each point also averages up to ${stride} consecutive submissions. These are probabilities, not binary mode draws. Each trial starts with q = 0.`;
+  }
+  function drawSizeHistogram(result) {
+    const counts = Array(20).fill(0), sizes = result.firstSizes;
+    sizes.forEach(x => { counts[Math.min(19, Math.floor(x * 20))] += 1; });
+    const width = 760, height = 180, L = 40, R = 16, T = 15, B = 148, peak = Math.max(...counts, 1);
+    let svg = `<svg viewBox="0 0 ${width} ${height}" aria-hidden="true">`;
+    for (const proportion of [0, 0.5, 1]) {
+      const y = B - proportion * (B-T);
+      svg += `<line x1="${L}" y1="${y}" x2="${width-R}" y2="${y}" stroke="#e5ece9"/><text x="${L-6}" y="${y+4}" text-anchor="end" fill="#758b90" font-size="11">${Math.round(proportion*peak)}</text>`;
+    }
+    counts.forEach((n, i) => {
+      const step = (width-L-R) / counts.length, h = n / peak * (B-T);
+      svg += `<rect x="${L+i*step+1}" y="${B-h}" width="${step-3}" height="${h}" rx="2" fill="#117890" opacity=".78"/>`;
+    });
+    for (const value of [0, 0.25, 0.5, 0.75, 1]) svg += `<text x="${L+value*(width-L-R)}" y="172" text-anchor="middle" fill="#758b90" font-size="11">${value}</text>`;
+    svg += "</svg>";
+    $("size-histogram").innerHTML = svg;
+    $("size-sample-summary").textContent = `${distributionNames[result.settings.sizeDistribution]} · mean ${format(mean(sizes), 3)}`;
+    $("size-chart-note").textContent = `All ${sizes.length} true sizes from the first trial, before judgment error. Vertical axis: number of jobs per size interval. Seed: ${result.settings.seed === "" ? "fresh randomness" : result.settings.seed}.`;
   }
 
   function drawProbabilityCurve() {
@@ -400,10 +670,22 @@
     const maximum = Math.max(result.trueMean, result.objectiveMean, 1);
     $("objective-comparison").innerHTML = `<div class="cost-row"><span class="cost-name">Model 1 · J₁</span><div class="cost-track"><span class="objective-true" style="width:${result.trueMean / maximum * 100}%"></span></div><strong>${format(result.trueMean, 2)}</strong></div><div class="cost-row"><span class="cost-name">Model 2 · J₂</span><div class="cost-track"><span class="objective-reported" style="width:${result.reportedMean / maximum * 100}%"></span><span class="objective-feedback" style="width:${result.feedbackMean / maximum * 100}%"></span></div><strong>${format(result.objectiveMean, 2)}</strong></div>`;
     $("objective-comparison").setAttribute("aria-label", `Mean objective: Model 1 ${format(result.trueMean, 2)}; Model 2 ${format(result.objectiveMean, 2)}, comprising ${format(result.reportedMean, 2)} bins and ${format(result.feedbackMean, 2)} feedback.`);
-    $("feedback-summary").textContent = result.settings.feedbackEnabled ? `Perceived-size feedback with s = ${result.settings.simpleThreshold}, c = ${result.settings.feedbackCoefficient}. Mean jobs with αⱼ > 0: ${format(result.feedbackJobMean)} of ${result.settings.jobs} per trial. Totals include every job in each trial.` : "Feedback is off: every αⱼ = 0, so each model’s objective equals its bin count.";
+    $("feedback-summary").textContent = result.settings.feedbackEnabled ? `Perceived-size feedback with s = ${result.settings.simpleThreshold}, c = ${result.settings.feedbackCoefficient}. Mean jobs with αⱼ > 0: ${format(result.feedbackJobMean)} of ${result.settings.jobs} per trial. Totals include every job in each trial.` : "Feedback is off: Hard is drawn using g₀(z), q stays 0 and every αⱼ = 0. Each objective equals its bin count.";
   }
 
   function render(result) {
+    const layered = isTwoLayer(result.settings.algorithm);
+    const baseLabel = algorithmLabels[baselineAlgorithm(result.settings.algorithm)];
+    $("comparison-rule").textContent = layered
+      ? `Same true jobs and submission order. Model 1 packs true sizes using ordinary ${baseLabel}; Model 2 uses ${algorithmLabels[result.settings.algorithm]} on reported sizes, with K = ${result.settings.reservationLimit}. The extra comparison below uses ordinary ${baseLabel} on the identical reported sequence, isolating the placement effect.`
+      : "Both models use the selected algorithm and the same jobs in each trial. Model 1 packs true sizes; Model 2 packs reported sizes. One user draws a mode using g₀(z) and past quality history, then receives feedback after placement. Feedback can be switched off.";
+    $("two-layer-results").hidden = !layered;
+    if (layered) {
+      const stats = result.reservationMeans;
+      const saved = result.reportedBaselineMean - result.reportedMean;
+      $("two-layer-comparison").textContent = `Same reported jobs: ordinary ${baseLabel} ${format(result.reportedBaselineMean, 2)} bins → ${algorithmLabels[result.settings.algorithm]} ${format(result.reportedMean, 2)} bins. Bins saved: ${saved > 0 ? "+" : ""}${format(saved, 2)} (negative = more bins). Feedback is identical for this comparison.`;
+      $("two-layer-summary").textContent = `Simple-only reservations · K = ${result.settings.reservationLimit} · Matched pairs in reserved layer: ${format(stats.pairs, 2)} · Simple placed in existing ordinary Hard bins: ${format(stats.ordinaryHardFills, 2)} · Unmatched Simple reserved bins at end: ${format(stats.unmatched, 2)} · Threshold Simple arrivals sent to ordinary pool at limit: ${format(stats.overflow, 2)} · Ordinary bins: ${format(stats.ordinaryBins, 2)}. Hard is never reserved. Unmatched Simple reservations remain counted; no final repacking.`;
+    }
     $("true-mean").textContent = format(result.trueMean);
     $("reported-mean").textContent = format(result.reportedMean);
     $("difference-mean").textContent = `${result.differenceMean > 0 ? "+" : ""}${format(result.differenceMean)}`;
@@ -412,7 +694,15 @@
     drawMainChart(result);
     drawDifferenceChart(result);
     renderFeedback(result);
-    $("sample-table").innerHTML = result.firstRows.map((row) => `<tr><th scope="row">${row.id}</th><td>${format(row.actual, 3)}</td><td>${format(row.perceived, 3)}</td><td>${format(100 * row.hardProbability, 1)}%</td><td>${row.hard ? "Hard" : "Simple"}</td><td>${format(row.reported, 3)}</td><td>${row.simpleIndicator}</td><td>${format(row.feedback, 4)}</td><td>${row.trueBin}</td><td>${row.reportedBin}</td></tr>`).join("");
+    renderBehavior(result);
+    $("sample-table").innerHTML = result.firstRows.map((row) => {
+      const quality = !result.settings.feedbackEnabled ? "Off" : row.qualityFailed ? "Shortfall" : "Met";
+      const rate = `${format(row.expectedBefore * 100, 1)}% → ${format(row.expectedAfter * 100, 1)}%`;
+      const field = (label, value) => `<div><dt>${label}</dt><dd>${value}</dd></div>`;
+      return `<tr><th scope="row">#${row.id}</th><td><span class="job-size-flow"><span><small>a</small>${format(row.actual, 3)}</span><span><small>z</small>${format(row.perceived, 3)}</span><span><small>r</small>${format(row.reported, 3)}</span></span></td><td><span class="job-mode ${row.hard ? "is-hard" : "is-simple"}">${row.hard ? "Hard" : "Simple"}</span></td><td><span class="job-quality ${row.qualityFailed ? "has-shortfall" : ""}">${quality}</span></td><td>${row.reportedBin}</td><td><button type="button" class="job-details-button" data-job-details="${row.id}" aria-expanded="false" aria-controls="job-details-${row.id}" aria-label="Show details for job ${row.id}">View</button></td></tr>
+      <tr class="job-detail-row" id="job-details-${row.id}" hidden><td colspan="6"><div class="job-detail-panel"><section><h4>Mode draw · U1</h4><dl>${field("Sensitivity λ", format(row.lambda, 3))}${field("Base g₀(z)", `${format(row.baseProbability * 100, 2)}%`)}${field("Adjusted Hard probability", `${format(row.hardProbability * 100, 2)}%`)}${field("Uniform draw v", format(row.draw, 4))}</dl></section><section><h4>Quality &amp; history</h4><dl>${field("Quality shortfall", quality)}${field("Feedback α", format(row.feedback, 4))}${field("Failed / observed Simple", row.observedSimple ? `${row.failures}/${row.observedSimple}` : "No observations")}${field("q before → after", rate)}</dl></section><section><h4>Placement</h4><dl>${field("Submission number", row.submission)}${field("Model 1 bin · true size", row.trueBin)}${field("Model 2 bin · report", row.reportedBin)}${row.placementLayer ? field("Placement route at arrival", row.placementLayer) : ""}</dl></section></div></td></tr>`;
+    }).join("");
+
   }
 
   function showError(message) {
@@ -469,15 +759,44 @@
   }
 
   function updateAlgorithmDescription() {
-    const description = algorithmDescriptions[$("packing-algorithm").value];
+    const algorithm = $("packing-algorithm").value;
+    const description = algorithmDescriptions[algorithm];
+    const layered = isTwoLayer(algorithm);
     $("algorithm-description").textContent = description;
-    $("selected-algorithm-rule").textContent = `${description} Both models use this same placement rule.`;
+    $("reservation-controls").hidden = !layered;
+    $("reservation-limit").disabled = !layered;
+    $("selected-algorithm-rule").textContent = layered
+      ? `${description} With K > 0, threshold Simple checks existing ordinary Hard bins before reservation or overflow. At most K threshold Simple bins are reserved. Hard never opens a reservation; matching takes priority even at the limit. Jobs never move after placement. K = 0 uses ordinary FF/BF without special priority. Requires s + h = 1. Model 1 uses ordinary ${algorithmLabels[baselineAlgorithm(algorithm)]}.`
+      : `${description} Both models use this same placement rule.`;
+    updateComplementaryStatus();
+  }
+
+  function updateComplementaryStatus() {
+    const s = Number($("simple-threshold").value), h = Number($("hard-threshold").value);
+    const validS = s > 0 && s < 0.5;
+    const complementary = validS && h > 0.5 && h < 1 && Math.abs(s + h - 1) <= 1e-12;
+    $("complementary-status").textContent = complementary ? `Complementary bounds ready: s = ${s}, h = ${h}.`
+      : validS ? `Current s + h = ${format(s + h, 3)}. Set h to ${Number((1 - s).toPrecision(15))} before running 双层 FF/BF.`
+      : "Set Simple upper bound s strictly between 0 and 0.5, then set h = 1 − s.";
+    $("complementary-bounds").disabled = !validS;
   }
 
   function updateFeedbackControls() {
     $("feedback-coefficient").disabled = !$("feedback-enabled").checked;
+    updateBehaviorControls();
   }
 
+  $("sample-table").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-job-details]");
+    if (!button) return;
+    const row = $(button.getAttribute("aria-controls"));
+    if (!row) return;
+    const expanded = button.getAttribute("aria-expanded") !== "true";
+    row.hidden = !expanded;
+    button.setAttribute("aria-expanded", String(expanded));
+    button.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} details for job ${button.getAttribute("data-job-details")}`);
+    button.textContent = expanded ? "Hide" : "View";
+  });
   form.addEventListener("submit", (event) => { event.preventDefault(); executeFromForm(); });
   $("advanced-toggle").addEventListener("click", () => {
     const expanded = $("advanced-toggle").getAttribute("aria-expanded") !== "true";
@@ -497,11 +816,20 @@
   });
   $("error-type").addEventListener("change", updateErrorDescription);
   $("packing-algorithm").addEventListener("change", updateAlgorithmDescription);
+  $("simple-threshold").addEventListener("input", updateComplementaryStatus);
+  $("hard-threshold").addEventListener("input", updateComplementaryStatus);
+  $("complementary-bounds").addEventListener("click", () => {
+    const s = Number($("simple-threshold").value);
+    if (s > 0 && s < 0.5) $("hard-threshold").value = Number((1 - s).toPrecision(15));
+    updateComplementaryStatus();
+  });
   $("feedback-enabled").addEventListener("change", updateFeedbackControls);
+  $("size-distribution").addEventListener("change", updateDistributionControls);
   drawProbabilityCurve();
   updateErrorDescription();
   updateAlgorithmDescription();
   updateFeedbackControls();
+  updateDistributionControls();
   executeFromForm();
 
   // Browser agents can run the same visible experiment without a separate backend.
@@ -512,11 +840,13 @@
         jobs: { type: "integer", minimum: 500, maximum: 5000 },
         trials: { type: "integer", minimum: 1, maximum: 300 },
         algorithm: { type: "string", enum: Object.keys(packers) },
+        reservationLimit: { type: "integer", minimum: 0, maximum: 5000, default: 10, description: "Maximum unmatched threshold Simple bins; Hard is never reserved. Used only by two-layer FF/BF. Zero disables reservations." },
         probabilityExpression: { type: "string", minLength: 1, maxLength: 180 },
         simpleThreshold: { type: "number", minimum: 0, maximum: 1 },
         hardThreshold: { type: "number", minimum: 0, maximum: 1 },
         errorType: { type: "string", enum: [...errorTypes] },
         errorScale: { type: "number", minimum: 0, maximum: 1 },
+        ...behaviorSchema(),
         feedbackEnabled: { type: "boolean", default: false },
         feedbackCoefficient: { type: "number", minimum: 0, default: 1 },
       },
@@ -527,13 +857,14 @@
       Promise.resolve(document.modelContext.registerTool({
         name: "run_bin_packing_experiment",
         title: "Run bin packing experiment",
-        description: "Run paired randomized bin packing trials and update bin-count and optional perceived-size feedback objectives.",
+        description: "Run paired static trials for one user with optional history-adjusted mode probabilities and quality penalties.",
         inputSchema: schema,
         annotations: { readOnlyHint: false, untrustedContentHint: false },
         async execute(input) {
           const settings = validate(input);
-          const mapping = { jobs: "job-count", trials: "trial-count", algorithm: "packing-algorithm", probabilityExpression: "probability-expression", simpleThreshold: "simple-threshold", hardThreshold: "hard-threshold", errorType: "error-type", errorScale: "error-scale", feedbackCoefficient: "feedback-coefficient" };
+          const mapping = { jobs: "job-count", trials: "trial-count", algorithm: "packing-algorithm", reservationLimit: "reservation-limit", probabilityExpression: "probability-expression", simpleThreshold: "simple-threshold", hardThreshold: "hard-threshold", errorType: "error-type", errorScale: "error-scale", feedbackCoefficient: "feedback-coefficient" };
           Object.entries(mapping).forEach(([key, id]) => { $(id).value = settings[key]; });
+          applyBehaviorToForm(settings);
           $("feedback-enabled").checked = settings.feedbackEnabled;
           $("probability-expression").dispatchEvent(new Event("input"));
           updateErrorDescription();
@@ -541,7 +872,7 @@
           updateFeedbackControls();
           drawProbabilityCurve();
           const result = await executeSettings(settings);
-          return { trueMean: result.trueMean, reportedMean: result.reportedMean, differenceMean: result.differenceMean, feedbackMean: result.feedbackMean, feedbackJobMean: result.feedbackJobMean, objectiveMean: result.objectiveMean, objectiveDifferenceMean: result.objectiveDifferenceMean, feedbackEnabled: settings.feedbackEnabled, feedbackCoefficient: settings.feedbackCoefficient, trials: settings.trials };
+          return { trueMean: result.trueMean, reportedMean: result.reportedMean, differenceMean: result.differenceMean, feedbackMean: result.feedbackMean, feedbackJobMean: result.feedbackJobMean, objectiveMean: result.objectiveMean, objectiveDifferenceMean: result.objectiveDifferenceMean, feedbackEnabled: settings.feedbackEnabled, feedbackCoefficient: settings.feedbackCoefficient, userCount: 1, lambda: settings.lambda, hardShare: result.hardShare, finalRateMean: result.finalRateMean, sizeDistribution: settings.sizeDistribution, trials: settings.trials, reservationLimit: settings.reservationLimit, reservationMeans: result.reservationMeans, reportedBaselineMean: result.reportedBaselineMean };
         },
       })).catch(() => {});
     } catch (_) { /* The normal page works without WebMCP. */ }

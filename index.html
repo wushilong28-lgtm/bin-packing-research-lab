@@ -9,6 +9,7 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2310212b'/%3E%3Cpath d='M12 21h40v31H12z' fill='none' stroke='%23f2b544' stroke-width='4'/%3E%3Cpath d='M12 36h40M28 21v15M40 36v16' stroke='%23f2b544' stroke-width='4'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./styles.css" />
   <script src="./probability.js" defer></script>
+  <script src="./static-behavior.js" defer></script>
   <script src="./app.js" defer></script>
 </head>
 <body class="basic-page">
@@ -20,7 +21,7 @@
   <main class="workspace">
     <aside class="controls" aria-labelledby="config-title">
       <div class="panel-heading"><div><p class="eyebrow">EXPERIMENT SETUP</p><h1 id="config-title">Design your experiment</h1></div><span class="edition">01 / 03</span><button id="advanced-toggle" class="advanced-toggle" type="button" aria-expanded="false">More settings</button></div>
-      <p class="intro">Both models use the same true job sizes and arrival order. Change the settings and rerun the experiment.</p>
+      <p class="intro">One user, repeated submissions and optional quality feedback. Both packing models share the same true jobs; every trial starts with q = 0.</p>
       <form id="experiment-form">
         <section class="control-section" aria-labelledby="sample-heading">
           <h2 id="sample-heading"><span>01</span> Sampling</h2>
@@ -28,16 +29,47 @@
             <label class="field"><span>Number of jobs <small>N</small></span><input id="job-count" type="number" min="500" max="5000" step="1" value="1000" required /><em>500–5000 per trial</em></label>
             <label class="field"><span>Number of trials <small>R</small></span><input id="trial-count" type="number" min="1" max="300" step="1" value="100" required /><em>Independent trials</em></label>
           </div>
-          <label class="field algorithm-field" for="packing-algorithm"><span>Placement algorithm</span><select id="packing-algorithm"><option value="first-fit">First Fit</option><option value="best-fit">Best Fit</option><option value="next-fit">Next Fit</option><option value="random-fit">Random Fit</option></select></label>
+          <label class="field algorithm-field" for="packing-algorithm"><span>Placement algorithm</span><select id="packing-algorithm"><option value="first-fit">First Fit</option><option value="best-fit">Best Fit</option><option value="next-fit">Next Fit</option><option value="random-fit">Random Fit</option><option value="two-layer-ff">双层 FF</option><option value="two-layer-bf">双层 BF</option></select></label>
           <p id="algorithm-description" class="field-note">First Fit checks open bins from oldest to newest and uses the first bin with room.</p>
-          <p class="field-note">True sizes are sampled independently: a ~ Uniform(0, 1)</p>
+          <div id="reservation-controls" class="spaced" hidden>
+            <label class="field"><span>Simple reservation limit <small>K</small></span><input id="reservation-limit" type="number" min="0" max="5000" step="1" value="10" required disabled /><em>Maximum unmatched threshold Simple bins. K = 0 uses ordinary FF/BF.</em></label>
+            <p class="field-note">Requires 0 &lt; s &lt; 0.5 and h = 1 − s. With K &gt; 0, Simple at r = s first fills an eligible existing ordinary Hard bin; only if none fits is it reserved, up to K bins. Arriving Hard at r = h first matches a reserved Simple; otherwise it enters ordinary FF/BF. Hard is never reserved. All reserved bins count; jobs never move after placement.</p>
+            <p id="complementary-status" class="field-note" role="status"></p>
+            <button id="complementary-bounds" class="job-details-button" type="button">Set h = 1 − s</button>
+          </div>
+          <label class="field spaced"><span>Random seed <small>optional</small></span><input id="random-seed" type="text" inputmode="numeric" value="20261029" maxlength="10" /><em>Same seed repeats the experiment. Blank = fresh randomness.</em></label>
+        </section>
+        <section class="control-section" aria-labelledby="distribution-heading">
+          <h2 id="distribution-heading"><span>02</span> Data distribution</h2>
+          <label class="field"><span>True job size distribution</span><select id="size-distribution"><option value="uniform">Uniform distribution</option><option value="normal">Gaussian distribution · truncated</option><option value="beta">Beta distribution</option><option value="exponential">Exponential distribution · truncated</option><option value="bimodal">Two-cluster Gaussian mixture</option></select></label>
+          <div id="distribution-uniform" class="field-grid two spaced">
+            <label class="field"><span>Minimum size</span><input id="size-min" type="number" min="0" max="1" step="0.01" value="0" required /></label>
+            <label class="field"><span>Maximum size</span><input id="size-max" type="number" min="0" max="1" step="0.01" value="1" required /></label>
+          </div>
+          <div id="distribution-normal" class="field-grid two spaced" hidden>
+            <label class="field"><span>Gaussian mean <small>μ</small></span><input id="size-mean" type="number" min="0" max="1" step="0.01" value="0.5" required /></label>
+            <label class="field"><span>Standard deviation <small>σ</small></span><input id="size-std" type="number" min="0.01" max="1" step="0.01" value="0.15" required /></label>
+          </div>
+          <div id="distribution-beta" class="field-grid two spaced" hidden>
+            <label class="field"><span>Beta shape <small>α</small></span><input id="beta-alpha" type="number" min="0.1" max="50" step="0.1" value="2" required /></label>
+            <label class="field"><span>Beta shape <small>β</small></span><input id="beta-beta" type="number" min="0.1" max="50" step="0.1" value="5" required /></label>
+          </div>
+          <div id="distribution-exponential" class="spaced" hidden><label class="field"><span>Exponential rate <small>λ</small></span><input id="size-rate" type="number" min="0.01" max="100" step="0.01" value="3" required /></label></div>
+          <div id="distribution-bimodal" class="field-grid two spaced" hidden>
+            <label class="field"><span>Low-cluster mean</span><input id="mixture-low" type="number" min="0" max="1" step="0.01" value="0.25" required /></label>
+            <label class="field"><span>High-cluster mean</span><input id="mixture-high" type="number" min="0" max="1" step="0.01" value="0.75" required /></label>
+            <label class="field"><span>Cluster std. dev.</span><input id="mixture-std" type="number" min="0.01" max="1" step="0.01" value="0.08" required /></label>
+            <label class="field"><span>Low-cluster share</span><input id="mixture-weight" type="number" min="0" max="1" step="0.05" value="0.5" required /></label>
+          </div>
+          <p id="distribution-description" class="field-note"></p>
+          <p class="field-note">This generates true sizes a. Judgment error below changes the user's perception z separately. The single user draws every job from this distribution.</p>
         </section>
         <section class="control-section" aria-labelledby="report-heading">
-          <h2 id="report-heading"><span>02</span> Perceived &amp; reported size</h2>
+          <h2 id="report-heading"><span>03</span> Perceived &amp; reported size</h2>
           <p class="section-copy">A job is first perceived as z = clip(a + ε, 0, 1), where a is its true size and ε is judgment error. The next section uses z to select a mode; that mode determines the final reported size.</p>
           <div class="field-grid two">
-            <label class="field"><span>Simple upper bound <small>tₛ</small></span><input id="simple-threshold" type="number" min="0" max="1" step="0.01" value="0.2" required /><em>In Simple mode, report min(tₛ, z): the reported size cannot exceed this cap.</em></label>
-            <label class="field"><span>Hard lower bound <small>tₗ</small></span><input id="hard-threshold" type="number" min="0" max="1" step="0.01" value="0.7" required /><em>In Hard mode, report max(tₗ, z): the reported size cannot fall below this floor.</em></label>
+            <label class="field"><span>Simple upper bound <small>tₛ</small></span><input id="simple-threshold" type="number" min="0" max="1" step="0.01" value="0.2" required /><em>Merchant rule after selection: min(tₛ, z), capped at this bound.</em></label>
+            <label class="field"><span>Hard lower bound <small>tₗ</small></span><input id="hard-threshold" type="number" min="0" max="1" step="0.01" value="0.7" required /><em>Merchant rule after selection: max(tₗ, z), floored at this bound.</em></label>
           </div>
           <div class="field-grid error-grid">
             <label class="field"><span>Judgment error</span><select id="error-type"><option value="none">No error</option><option value="normal" selected>Normal distribution</option><option value="uniform">Uniform distribution</option><option value="laplace">Laplace distribution</option><option value="triangular">Symmetric triangular</option><option value="cauchy">Cauchy distribution</option><option value="exponential">Centered exponential</option><option value="two-point">Two-point distribution</option></select></label>
@@ -45,22 +77,34 @@
           </div>
           <p id="error-description" class="field-note">Normal distribution: ε ~ N(0, σ²). Clip a + ε to [0, 1] to obtain z.</p>
         </section>
+        <section class="control-section users-section" aria-labelledby="users-heading">
+          <h2 id="users-heading"><span>04</span> User response</h2>
+          <p class="section-copy">One user submits all jobs sequentially. Mode choices use the current perceived size and this user's past feedback.</p>
+          <label class="field spaced" for="user-lambda"><span>Feedback sensitivity <small>λ</small></span><input id="user-lambda" type="number" min="0" max="1" step="any" value="0.5" required /><em>0–1 · response to history</em></label>
+          <p class="feedback-formula">g(z,t) = g₀(z) + λ·qₜ₋₁·(1 − g₀(z))</p>
+          <p id="user-response-note" class="field-note"></p>
+          <p class="field-note">q starts at 0 in each trial. The user does not know the merchant's bounds s, h or the current reported size when choosing.</p>
+        </section>
         <section class="control-section" aria-labelledby="choice-heading">
-          <h2 id="choice-heading"><span>03</span> Mode selection probability</h2>
-          <p class="section-copy">g(z) is the probability of choosing Hard mode for a job with perceived size z. Otherwise the job uses Simple mode. Mode selection never uses the true size directly.</p>
-          <label class="field" for="probability-preset"><span>Preset function</span><select id="probability-preset"><option value="logistic">Increasing logistic</option><option value="decreasing">Linear decrease</option><option value="increasing">Linear increase</option><option value="constant">Constant probability</option><option value="step">Step function</option><option value="custom">Custom</option></select></label>
-          <label class="field expression-field" for="probability-expression"><span>Probability expression <small>g(z)</small></span><input id="probability-expression" type="text" value="1/(1+exp(-12*(z-0.5)))" maxlength="180" spellcheck="false" autocomplete="off" required /></label>
-          <p class="field-note expression-help">Variable z ∈ [0, 1]. Supports +, −, ×, ÷, ^, parentheses, exp, log, sqrt, abs, min, max, clamp, and step.</p>
-          <div class="curve-frame"><svg id="probability-chart" viewBox="0 0 320 122" role="img" aria-label="Probability of choosing Hard mode by perceived job size"></svg></div>
-          <p id="curve-error" class="form-error" role="status" hidden></p>
+          <h2 id="choice-heading"><span>05</span> Mode selection</h2>
+          <div id="probability-controls">
+            <p class="section-copy">g₀(z) is the base probability of choosing Hard. With feedback on, past quality outcomes raise it using the formula above; otherwise use g₀(z) directly.</p>
+            <label class="field" for="probability-preset"><span>Preset function</span><select id="probability-preset"><option value="logistic">Increasing logistic</option><option value="decreasing">Linear decrease</option><option value="increasing">Linear increase</option><option value="constant">Constant probability</option><option value="step">Step function</option><option value="custom">Custom</option></select></label>
+            <label class="field expression-field" for="probability-expression"><span>Base probability expression <small>g₀(z)</small></span><input id="probability-expression" type="text" value="1/(1+exp(-12*(z-0.5)))" maxlength="180" spellcheck="false" autocomplete="off" required /></label>
+            <p class="field-note expression-help">Variable z ∈ [0, 1]. Supports +, −, ×, ÷, ^, parentheses, exp, log, sqrt, abs, min, max, clamp, and step.</p>
+            <div class="curve-frame"><svg id="probability-chart" viewBox="0 0 320 122" role="img" aria-label="Base Hard probability g₀(z), before feedback"></svg></div>
+            <p class="field-note">This curve shows the base g₀(z), equivalent to q = 0. The results show the adjusted probabilities over submissions. Mode selection never uses true size directly.</p>
+            <p id="curve-error" class="form-error" role="status" hidden></p>
+          </div>
         </section>
         <section class="control-section feedback-section" aria-labelledby="feedback-heading">
-          <h2 id="feedback-heading"><span>04</span> Feedback</h2>
-          <label class="feedback-toggle" for="feedback-enabled"><span>Include feedback in objective</span><input id="feedback-enabled" type="checkbox" role="switch" aria-describedby="feedback-description" /></label>
-          <label class="field feedback-coefficient-field" for="feedback-coefficient"><span>Feedback coefficient <small>c</small></span><input id="feedback-coefficient" type="number" min="0" step="any" value="1" required disabled /><em>Any nonnegative coefficient. Set c = 0 for zero feedback.</em></label>
-          <p class="feedback-formula">αⱼ = bⱼ × max(Xⱼ − s, 0) × c</p>
-          <p id="feedback-description" class="field-note">Xⱼ is the perceived size z used for mode selection, after judgment error and clipping. s is the Simple upper bound. bⱼ = 1 for Simple and 0 for Hard.</p>
-          <p class="field-note">Only Simple jobs with perceived size above s contribute feedback. Model 2 objective: bins + Σαⱼ. Turn feedback off to use bin count alone. Rerun to apply changes.</p>
+          <h2 id="feedback-heading"><span>06</span> Feedback</h2>
+          <label class="feedback-toggle" for="feedback-enabled"><span>Enable feedback</span><input id="feedback-enabled" type="checkbox" role="switch" aria-describedby="feedback-description" checked /></label>
+          <p id="feedback-description" class="field-note">On: update quality history after placement and adjust the next Hard probability. Off: use g₀(z), keep q = 0 and set α = 0. Rerun to apply changes.</p>
+          <label class="field feedback-coefficient-field" for="feedback-coefficient"><span>Feedback coefficient <small>c</small></span><input id="feedback-coefficient" type="number" min="0" step="any" value="1" required /><em>Objective weight only. c = 0 removes the penalty, while quality history still updates.</em></label>
+          <p class="feedback-formula">q = failed Simple / observed Simple<br />αⱼ = c·max(zⱼ − rⱼ, 0)</p>
+          <p class="field-note">After a Simple job, add one observation; a shortfall means the perceived need z exceeds the resource r assigned by the merchant. Successful Simple jobs also count. Hard leaves q unchanged. With no Simple observations, q = 0. No learning rate or initial-rate parameter is used.</p>
+          <p class="field-note">For Simple, αⱼ = c·max(zⱼ − s, 0); for Hard, αⱼ = 0. Feedback uses perceived size after judgment error, not true size. Model 2 objective: bins + Σαⱼ. History resets in every independent trial.</p>
         </section>
         <button class="run-button" type="submit"><span aria-hidden="true">▶</span> Run random experiment</button>
         <p id="form-error" class="form-error" role="alert" hidden></p>
@@ -68,7 +112,8 @@
     </aside>
     <section class="results" aria-labelledby="results-heading">
       <div class="results-heading"><div><p class="eyebrow">PAIRED EXPERIMENT / COMPARISON</p><h2 id="results-heading">Bin count comparison</h2></div><div class="run-badge" id="run-badge">Ready to run</div></div>
-      <div class="result-lead"><p>Both models use the selected algorithm and the same jobs in each trial. Model 1 packs true sizes; Model 2 packs reported sizes.</p></div>
+      <div class="result-lead"><p id="comparison-rule">Both models use the selected algorithm and the same jobs in each trial. Model 1 packs true sizes; Model 2 packs reported sizes. One user draws a mode using g₀(z) and past quality history, then receives feedback after placement. Feedback can be switched off.</p></div>
+      <div id="two-layer-results" class="two-layer-results" hidden><strong>Threshold pairing · trial means</strong><p id="two-layer-comparison"></p><p id="two-layer-summary"></p></div>
       <div class="stat-row"><article class="stat-card stat-true"><div class="stat-label"><i></i>Model 1 · True sizes</div><div class="stat-value" id="true-mean">—</div><div class="stat-unit">Mean bins used</div></article><article class="stat-card stat-reported"><div class="stat-label"><i></i>Model 2 · Reported sizes</div><div class="stat-value" id="reported-mean">—</div><div class="stat-unit">Mean bins used</div></article><article class="stat-card stat-difference"><div class="stat-label">Paired difference · Model 2 − Model 1</div><div class="stat-value" id="difference-mean">—</div><div class="stat-unit" id="difference-note">Mean of within-trial differences</div></article></div>
       <article class="chart-card feedback-results" aria-labelledby="objective-title">
         <div class="chart-heading"><div><p class="eyebrow">RESULTS / BINS + FEEDBACK</p><h3 id="objective-title">Objective comparison</h3></div><span id="feedback-status" class="run-badge">Feedback off</span></div>
@@ -82,10 +127,24 @@
         <div class="legend objective-legend"><span><i class="true-dot"></i>Model 1 bins</span><span><i class="reported-dot"></i>Model 2 bins</span><span><i class="feedback-dot"></i>Feedback Σαⱼ</span></div>
         <p id="feedback-summary" class="chart-caption">Feedback is off. Both objectives equal their bin counts.</p>
       </article>
+      <article id="user-results" class="chart-card user-results" aria-labelledby="user-results-title">
+        <div class="chart-heading"><div><p class="eyebrow">ONE USER / DECISION &amp; FEEDBACK</p><h3 id="user-results-title">How the user responds</h3></div><span id="learning-status" class="run-badge">Feedback on</span></div>
+        <div class="user-metrics"><div><span>Hard share · all trials</span><strong id="hard-share">—</strong></div><div><span>Final q · trial mean</span><strong id="final-q-mean">—</strong></div></div>
+        <p id="user-history-summary" class="chart-caption"></p>
+        <div class="chart-heading learning-chart-heading"><div><p class="eyebrow">ALL TRIALS / BY SUBMISSION NUMBER</p><h3>Mode probability and quality history</h3></div><div class="legend probability-legend"><span><i class="true-dot"></i>Base g₀(z)</span><span><i class="reported-dot"></i>Adjusted Hard</span><span><i class="feedback-dot"></i>q before choice</span></div></div>
+        <div id="learning-chart" class="learning-chart" role="img" aria-label="Base and feedback-adjusted Hard probabilities and past quality rate by submission number"></div>
+        <p id="learning-chart-note" class="chart-caption"></p>
+        <details class="user-detail" open><summary>Inspect U1's quality history · first trial</summary><div class="green-table-wrap"><table class="green-table"><thead><tr><th scope="col">User</th><th scope="col">λ</th><th scope="col">Jobs</th><th scope="col">Hard</th><th scope="col">Observed Simple</th><th scope="col">Shortfalls</th><th scope="col">Final q</th></tr></thead><tbody id="user-memory-table"></tbody></table></div></details>
+      </article>
+      <article class="chart-card" aria-labelledby="size-chart-title"><div class="chart-heading"><div><p class="eyebrow">FIRST TRIAL / ALL TRUE SIZES</p><h3 id="size-chart-title">Sampled data distribution</h3></div><span id="size-sample-summary" class="run-badge">—</span></div><div id="size-histogram" class="size-histogram" role="img" aria-label="Histogram of sampled true job sizes"></div><p id="size-chart-note" class="chart-caption"></p></article>
       <article class="chart-card" aria-labelledby="main-chart-title"><div class="chart-heading"><div><p class="eyebrow">RESULTS / BOX COUNT</p><h3 id="main-chart-title">Bin count distribution</h3></div><div class="legend"><span><i class="true-dot"></i>Model 1</span><span><i class="reported-dot"></i>Model 2</span></div></div><div id="main-chart" class="main-chart" role="img" aria-label="Distribution of bins used by both models"></div><p class="chart-caption">Lines show the 5th–95th percentile range; dots show means. Both models use the same jobs in each trial.</p></article>
-      <div class="bottom-grid"><article class="insight-card"><p class="eyebrow">PAIRED DIFFERENCE</p><h3>Bin count difference</h3><div id="difference-chart" class="difference-chart" role="img" aria-label="Distribution of Model 2 minus Model 1 bin counts"></div><p class="chart-caption">Positive values mean Model 2 uses more bins.</p></article><article class="model-card"><p class="eyebrow">EXPERIMENT RULES</p><h3>How to read this experiment</h3><div class="rule"><span class="rule-number">1</span><p>Each trial draws jobs with true sizes a between 0 and 1. Bins have capacity 1; a job opens a new bin if no eligible bin fits.</p></div><div class="rule"><span class="rule-number">2</span><p>Judgment error gives perceived size z = clip(a + ε, 0, 1). Hard mode is chosen with probability g(z); otherwise the job uses Simple mode.</p></div><div class="rule"><span class="rule-number">3</span><p>Simple reports min(tₛ, z), capped at tₛ. Hard reports max(tₗ, z), floored at tₗ.</p></div><div class="rule"><span class="rule-number">4</span><p id="selected-algorithm-rule">First Fit checks bins in opening order and uses the first one with room. Both models use this same placement rule.</p></div><div class="rule"><span class="rule-number">5</span><p>Model 1 packs true sizes; Model 2 packs reported sizes without checking true sizes. Compare their bin counts across paired trials.</p></div><div class="rule"><span class="rule-number">6</span><p>Optional feedback uses perceived size Xⱼ = z: αⱼ = bⱼ × max(z − s, 0) × c. bⱼ is 1 for Simple and 0 for Hard. Add all jobs’ feedback to Model 2’s bin count; when feedback is off, αⱼ = 0.</p></div></article></div>
-      <article class="chart-card" aria-labelledby="sample-title"><p class="eyebrow">FIRST TRIAL / JOB VIEW</p><h3 id="sample-title">Job reports and placements</h3><div class="green-table-wrap job-preview"><table class="green-table"><thead><tr><th scope="col">Job</th><th scope="col">True a</th><th scope="col">Perceived z</th><th scope="col">Hard p</th><th scope="col">Mode</th><th scope="col">Reported r</th><th scope="col">Simple bⱼ</th><th scope="col">Feedback αⱼ</th><th scope="col">Model 1 bin</th><th scope="col">Model 2 bin</th></tr></thead><tbody id="sample-table"></tbody></table></div><p class="chart-caption">First 100 jobs of the first trial. Feedback uses Perceived z (Xⱼ in the formula); all αⱼ are zero when feedback is off. Objective totals include all jobs, not only this preview.</p></article>
-      <p class="footnote">Trials are independent. Within each trial, both models share the true jobs and arrival order. Random Fit draws placement choices separately for each model. Experiment data stays in your browser.</p>
+      <div class="bottom-grid"><article class="insight-card"><p class="eyebrow">PAIRED DIFFERENCE</p><h3>Bin count difference</h3><div id="difference-chart" class="difference-chart" role="img" aria-label="Distribution of Model 2 minus Model 1 bin counts"></div><p class="chart-caption">Positive values mean Model 2 uses more bins.</p></article><article class="model-card"><p class="eyebrow">EXPERIMENT RULES</p><h3>How to read this experiment</h3><div class="rule"><span class="rule-number">1</span><p>Each trial draws jobs with true sizes a between 0 and 1. Bins have capacity 1; a job opens a new bin if no eligible bin fits.</p></div><div class="rule"><span class="rule-number">2</span><p>Judgment error gives perceived size z = clip(a + ε, 0, 1). One user draws Hard with probability g₀(z) + λq(1 − g₀(z)) when feedback is on, or g₀(z) when it is off. q contains only earlier Simple outcomes. The user does not know the merchant's s or h.</p></div><div class="rule"><span class="rule-number">3</span><p>Simple reports min(tₛ, z), capped at tₛ. Hard reports max(tₗ, z), floored at tₗ.</p></div><div class="rule"><span class="rule-number">4</span><p id="selected-algorithm-rule">First Fit checks bins in opening order and uses the first one with room. Both models use this same placement rule.</p></div><div class="rule"><span class="rule-number">5</span><p>Model 1 packs true sizes; Model 2 packs reported sizes without checking true sizes. Compare their bin counts across paired trials.</p></div><div class="rule"><span class="rule-number">6</span><p>After placement, a shortfall occurs if perceived need z exceeds assigned resource r. Update q = failed Simple / observed Simple, including successful Simple jobs; Hard leaves q unchanged. Add α = c·max(z − r, 0) to the bin count. c weights this penalty only. Feedback off means no update, q = 0 and α = 0.</p></div></article></div>
+      <article class="chart-card job-reports-card" aria-labelledby="sample-title">
+        <div class="chart-heading"><div><p class="eyebrow">FIRST TRIAL / JOB VIEW</p><h3 id="sample-title">Job reports and placements</h3></div><span class="run-badge">First 100 jobs</span></div>
+        <div class="green-table-wrap job-preview"><table class="green-table job-summary-table"><thead><tr><th scope="col">Job</th><th scope="col">Size <small>a → z → r</small></th><th scope="col">Mode</th><th scope="col">Quality</th><th scope="col">Bin</th><th scope="col">Details</th></tr></thead><tbody id="sample-table"></tbody></table></div>
+        <p class="chart-caption">a = true size, z = perceived size, r = reported size. Bin follows Model 2. All jobs belong to U1. Open details for λ, base and adjusted probabilities, the mode draw, quality feedback, q before/after and both model bins. Totals use all jobs.</p>
+      </article>
+      <p class="footnote">Trials are independent; the one user’s history resets to q = 0. Within each trial, both models share true jobs and submission order. The selected size distribution generates every job. Random Fit draws placement choices separately for each model. Experiment data stays in your browser.</p>
     </section>
   </main>
 </body>
