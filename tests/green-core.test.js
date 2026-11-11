@@ -60,6 +60,20 @@ test("threshold boundaries and algorithm choices are honored", () => {
   assert.deepEqual(engine.pack([0.6, 0.6, 0.4, 0.4], "first-fit", 1), [1, 1]);
 });
 
+test("assignment capture records the original placement without changing packing", () => {
+  const sizes = [0.4, 0.5, 0.1, 0.8];
+  for (const algorithm of engine.ALGORITHMS) {
+    const assignments = [];
+    const loads = engine.pack(sizes, algorithm, 0.7, 10, assignments);
+    assert.deepEqual(loads, engine.pack(sizes, algorithm, 0.7), algorithm);
+    assert.equal(assignments.length, sizes.length, algorithm);
+    assert.ok(assignments.every((bin) => Number.isInteger(bin) && bin >= 1 && bin <= loads.length), algorithm);
+  }
+  const first = [];
+  engine.pack(sizes, "first-fit", 0.7, 10, first);
+  assert.deepEqual(first, [1, 2, 1, 3]);
+});
+
 test("Harmonic separates size classes and uses one active bin per class", () => {
   assert.equal(engine.harmonicClass(0.6, 1, 10), 0);
   assert.equal(engine.harmonicClass(0.5, 1, 10), 1);
